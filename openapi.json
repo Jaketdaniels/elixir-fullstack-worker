@@ -1,0 +1,1307 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Dark Phoenix API",
+    "description": "Fullstack social map platform on Cloudflare Workers via AtomVM + WebAssembly. Four-layer architecture: JS Worker (Better Auth) -> WASI -> Elixir Router -> D1/KV.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Dark Phoenix"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8797",
+      "description": "Local development"
+    },
+    {
+      "url": "{productionUrl}",
+      "description": "Cloudflare Workers production",
+      "variables": {
+        "productionUrl": {
+          "default": "https://dark-phoenix.workers.dev"
+        }
+      }
+    }
+  ],
+  "tags": [
+    { "name": "auth", "description": "Authentication (Better Auth in JS layer, never hits WASM)" },
+    { "name": "location", "description": "Live location sharing via KV with TTL=300s" },
+    { "name": "profile", "description": "User profiles stored in D1" },
+    { "name": "messages", "description": "Direct messaging with token cost (D1)" },
+    { "name": "tokens", "description": "Token economy: balance, purchases, daily refills" },
+    { "name": "admin", "description": "Admin dashboard and statistics" },
+    { "name": "moderation", "description": "Content moderation, reporting, blocking" },
+    { "name": "notifications", "description": "Push notifications and in-app alerts" },
+    { "name": "pages", "description": "Server-rendered HTML pages (Elixir)" },
+    { "name": "assets", "description": "Static JS/CSS assets" },
+    { "name": "health", "description": "Health and status checks" }
+  ],
+  "paths": {
+    "/api/auth/sign-up/email": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Register with email and password",
+        "description": "Handled entirely in JS layer by Better Auth. Creates user, session, account rows. Post-signup hook initializes profile and token rows in D1.",
+        "operationId": "signUpEmail",
+        "x-layer": "js-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignUpRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Account created, session cookie set",
+            "headers": {
+              "Set-Cookie": {
+                "description": "Session cookie",
+                "schema": { "type": "string" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error (weak password, duplicate email)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "headers": {
+              "Retry-After": { "schema": { "type": "integer" } },
+              "X-RateLimit-Remaining": { "schema": { "type": "integer" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RateLimitError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/sign-in/email": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Sign in with email and password",
+        "description": "Handled entirely in JS layer by Better Auth. Returns session cookie. Competitor observed 1243ms on their /api/authenticate/current -- Dark Phoenix targets <200ms via edge-local D1.",
+        "operationId": "signInEmail",
+        "x-layer": "js-only",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in, session cookie set",
+            "headers": {
+              "Set-Cookie": { "schema": { "type": "string" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "headers": {
+              "Retry-After": { "schema": { "type": "integer" } },
+              "X-RateLimit-Remaining": { "schema": { "type": "integer" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RateLimitError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/sign-out": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Sign out and invalidate session",
+        "operationId": "signOut",
+        "x-layer": "js-only",
+        "responses": {
+          "200": {
+            "description": "Signed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/session": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "Get current session",
+        "description": "Returns current authenticated user from session cookie. Equivalent to competitor's /api/authenticate/current but handled at the edge.",
+        "operationId": "getSession",
+        "x-layer": "js-only",
+        "responses": {
+          "200": {
+            "description": "Session data",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Health check",
+        "description": "Returns runtime status. Passes through WASM layer to verify AtomVM is operational.",
+        "operationId": "healthCheck",
+        "x-layer": "elixir",
+        "responses": {
+          "200": {
+            "description": "Service healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" },
+                    "runtime": { "type": "string", "example": "atomvm-wasi" },
+                    "platform": { "type": "string", "example": "dark-phoenix" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/location": {
+      "post": {
+        "tags": ["location"],
+        "summary": "Update current user location",
+        "description": "Stores location in KV with TTL=300s (5 min expiry). Competitor uses /api/visitor/current/location with 521ms latency -- Dark Phoenix targets <50ms via KV at the edge. Includes display_name from D1 profile for map markers.",
+        "operationId": "updateLocation",
+        "x-layer": "elixir",
+        "x-binding": "KV:LOCATIONS",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LocationUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Location updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean", "example": true }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing lat/lng",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ValidationError" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/api/nearby": {
+      "get": {
+        "tags": ["location"],
+        "summary": "Get nearby users with live locations",
+        "description": "Lists all users with active locations from KV (prefix scan on loc:*). Locations auto-expire after 300s. Competitor loads map markers via viewport-based API -- Dark Phoenix returns all active users and filters client-side for simplicity at small scale.",
+        "operationId": "getNearby",
+        "x-layer": "elixir",
+        "x-binding": "KV:LOCATIONS",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "lat",
+            "in": "query",
+            "description": "Center latitude for distance sorting (future enhancement)",
+            "schema": { "type": "number", "format": "double" }
+          },
+          {
+            "name": "lng",
+            "in": "query",
+            "description": "Center longitude for distance sorting (future enhancement)",
+            "schema": { "type": "number", "format": "double" }
+          },
+          {
+            "name": "radius",
+            "in": "query",
+            "description": "Radius in km to filter results (future enhancement)",
+            "schema": { "type": "number", "format": "double" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of nearby users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "users": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/NearbyUser" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/profile/{id}": {
+      "get": {
+        "tags": ["profile"],
+        "summary": "Get user profile by ID",
+        "description": "Returns profile from D1. Competitor uses MongoDB ObjectIds -- Dark Phoenix uses Better Auth UUIDs.",
+        "operationId": "getProfile",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "User ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile data",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Profile" }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NotFoundError" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/profile": {
+      "put": {
+        "tags": ["profile"],
+        "summary": "Update own profile",
+        "description": "Upserts profile in D1 using INSERT ON CONFLICT. Supports display_name, bio, avatar_url. Enhanced with age, looking_for, body_type, position fields to match competitor feature set.",
+        "operationId": "updateProfile",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProfileUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean", "example": true }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/api/messages": {
+      "post": {
+        "tags": ["messages"],
+        "summary": "Send a direct message",
+        "description": "Sends message and deducts 1 token. Uses D1 batch for atomicity (token decrement + message insert). Returns 402 if insufficient tokens. Includes anti-spam: honeypot field, behavioral score, rate limiting.",
+        "operationId": "sendMessage",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SendMessage" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Message sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sent": { "type": "boolean", "example": true },
+                    "tokens_remaining": { "type": "integer", "example": 49 }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing to_id or content",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ValidationError" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": {
+            "description": "Insufficient tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string", "example": "insufficient_tokens" }
+                  }
+                }
+              }
+            }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/api/messages/{id}": {
+      "get": {
+        "tags": ["messages"],
+        "summary": "Get conversation with a user",
+        "description": "Returns up to 100 messages between authenticated user and target user, ordered by created_at ASC. Competitor likely uses /api/messages or /api/conversations.",
+        "operationId": "getConversation",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Other user's ID"
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Cursor for pagination: message ID to load before (future enhancement)",
+            "schema": { "type": "integer" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of messages to return (default 100, max 200)",
+            "schema": { "type": "integer", "default": 100, "maximum": 200 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Message" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/conversations": {
+      "get": {
+        "tags": ["messages"],
+        "summary": "List recent conversations",
+        "description": "Returns recent conversations with last message preview and unread count. New endpoint to support SPA-style inbox without full page reload (competitor likely has this).",
+        "operationId": "listConversations",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "default": 50, "maximum": 100 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversations": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/ConversationSummary" }
+                    },
+                    "unread_total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/messages/{id}/read": {
+      "post": {
+        "tags": ["messages"],
+        "summary": "Mark messages as read",
+        "description": "Marks all unread messages from a specific user as read. Currently done server-side when loading conversation page; this API enables SPA-style read receipts without page reload.",
+        "operationId": "markRead",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Sender user ID whose messages to mark read"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages marked read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "count": { "type": "integer", "description": "Number of messages marked read" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/tokens": {
+      "get": {
+        "tags": ["tokens"],
+        "summary": "Get token balance",
+        "description": "Returns current token balance, lifetime earned, and daily free remaining.",
+        "operationId": "getTokens",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Token balance",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TokenBalance" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/tokens/purchase": {
+      "post": {
+        "tags": ["tokens"],
+        "summary": "Purchase tokens",
+        "description": "Adds tokens to balance. Currently a stub (no payment integration). Competitor uses Chargebee for subscription billing -- Dark Phoenix can integrate Stripe or Chargebee here.",
+        "operationId": "purchaseTokens",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "amount": { "type": "integer", "default": 100, "minimum": 1, "maximum": 10000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tokens added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "added": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/tokens/daily": {
+      "post": {
+        "tags": ["tokens"],
+        "summary": "Claim daily free tokens",
+        "description": "Claims daily free token refill (20 tokens). Checks daily_reset_at to prevent double claims. New endpoint -- competitor bundles this into post-authentication.",
+        "operationId": "claimDailyTokens",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Daily tokens claimed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "added": { "type": "integer" },
+                    "balance": { "type": "integer" },
+                    "next_reset": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already claimed today",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string", "example": "already_claimed" },
+                    "next_reset": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/admin/stats": {
+      "get": {
+        "tags": ["admin"],
+        "summary": "Get admin statistics",
+        "description": "Returns platform-wide stats: user count, message count. Admin-only (future: role check).",
+        "operationId": "getAdminStats",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Platform statistics",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AdminStats" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/report": {
+      "post": {
+        "tags": ["moderation"],
+        "summary": "Report a user",
+        "description": "Submit a report against another user. New endpoint -- competitor has moderation but no visible report API. Stores in D1 reports table.",
+        "operationId": "reportUser",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReportRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Report submitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "report_id": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/api/block": {
+      "post": {
+        "tags": ["moderation"],
+        "summary": "Block a user",
+        "description": "Block another user. Blocked users are hidden from map, cannot send messages. Stored in D1 blocks table.",
+        "operationId": "blockUser",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["user_id"],
+                "properties": {
+                  "user_id": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "delete": {
+        "tags": ["moderation"],
+        "summary": "Unblock a user",
+        "operationId": "unblockUser",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["user_id"],
+                "properties": {
+                  "user_id": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User unblocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/blocks": {
+      "get": {
+        "tags": ["moderation"],
+        "summary": "List blocked users",
+        "operationId": "listBlocks",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Blocked users list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "blocks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "user_id": { "type": "string" },
+                          "display_name": { "type": "string" },
+                          "blocked_at": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/notifications/unread": {
+      "get": {
+        "tags": ["notifications"],
+        "summary": "Get unread notification count",
+        "description": "Returns unread message count and notification count. Enables badge updates without full page reload. Competitor polls this and shows '(8)' in page title.",
+        "operationId": "getUnreadCount",
+        "x-layer": "elixir",
+        "x-binding": "D1:DB",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Unread counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "unread_messages": { "type": "integer" },
+                    "unread_notifications": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/spam/check": {
+      "post": {
+        "tags": ["moderation"],
+        "summary": "Anti-spam behavioral check",
+        "description": "Client-side behavioral scoring endpoint. Collects timing, mouse movement entropy, and honeypot field to detect bots. Replaces competitor's /aapi/isHuman + Cloudflare challenge approach with a lighter-weight edge-computed check.",
+        "operationId": "spamCheck",
+        "x-layer": "elixir",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SpamCheckRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Spam check result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "human": { "type": "boolean" },
+                    "score": { "type": "number", "format": "float", "description": "0.0 = bot, 1.0 = human" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "tags": ["pages"],
+        "summary": "Landing page",
+        "description": "Server-rendered landing page. Redirects to /app if authenticated.",
+        "operationId": "pageLanding",
+        "x-layer": "elixir",
+        "responses": {
+          "200": {
+            "description": "Landing page HTML",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          },
+          "302": { "description": "Redirect to /app if authenticated" }
+        }
+      }
+    },
+    "/app": {
+      "get": {
+        "tags": ["pages"],
+        "summary": "Map page",
+        "description": "Main map interface with Leaflet. Requires authentication.",
+        "operationId": "pageMap",
+        "x-layer": "elixir",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Map page HTML with embedded auth data",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          },
+          "302": { "description": "Redirect to /login if not authenticated" }
+        }
+      }
+    },
+    "/app.js": {
+      "get": {
+        "tags": ["assets"],
+        "summary": "Client JavaScript bundle",
+        "description": "All client-side JS: auth forms, Leaflet map init, geolocation, nearby polling, profile forms, messaging, token purchase.",
+        "operationId": "assetJs",
+        "x-layer": "elixir",
+        "responses": {
+          "200": {
+            "description": "JavaScript bundle",
+            "headers": {
+              "Cache-Control": { "schema": { "type": "string", "example": "public, max-age=3600" } }
+            },
+            "content": { "application/javascript": { "schema": { "type": "string" } } }
+          }
+        }
+      }
+    },
+    "/app.css": {
+      "get": {
+        "tags": ["assets"],
+        "summary": "CSS stylesheet",
+        "description": "Dark Phoenix themed CSS: near-black background, fire gradients, Outfit font.",
+        "operationId": "assetCss",
+        "x-layer": "elixir",
+        "responses": {
+          "200": {
+            "description": "CSS stylesheet",
+            "headers": {
+              "Cache-Control": { "schema": { "type": "string", "example": "public, max-age=3600" } }
+            },
+            "content": { "text/css": { "schema": { "type": "string" } } }
+          }
+        }
+      }
+    },
+    "/migrate": {
+      "post": {
+        "tags": ["admin"],
+        "summary": "Run database migrations",
+        "description": "Runs Better Auth database migrations. One-time setup endpoint handled in JS layer.",
+        "operationId": "runMigrations",
+        "x-layer": "js-only",
+        "responses": {
+          "200": {
+            "description": "Migrations complete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string" },
+                    "created": { "type": "array", "items": { "type": "string" } },
+                    "added": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "better-auth.session_token",
+        "description": "Better Auth session cookie. Set on sign-in/sign-up, validated in JS layer, auth data injected into WASM via _state.auth."
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Not authenticated. API routes return 401 JSON. Page routes redirect to /login.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": { "type": "string", "example": "unauthorized" }
+              }
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Insufficient permissions (e.g., non-admin accessing admin endpoints)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": { "type": "string", "example": "forbidden" }
+              }
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Rate limited. Retry after the specified duration.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds until rate limit resets",
+            "schema": { "type": "integer" }
+          },
+          "X-RateLimit-Limit": {
+            "description": "Max requests per window",
+            "schema": { "type": "integer" }
+          },
+          "X-RateLimit-Remaining": {
+            "description": "Remaining requests in window",
+            "schema": { "type": "integer" }
+          },
+          "X-RateLimit-Reset": {
+            "description": "Unix timestamp when window resets",
+            "schema": { "type": "integer" }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/RateLimitError" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "SignUpRequest": {
+        "type": "object",
+        "required": ["email", "password", "name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string", "minLength": 8, "maxLength": 128 },
+          "_hp": {
+            "type": "string",
+            "description": "Honeypot field -- should be empty. Non-empty value indicates bot."
+          }
+        }
+      },
+      "SignInRequest": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string" },
+          "_hp": {
+            "type": "string",
+            "description": "Honeypot field -- should be empty"
+          }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "email": { "type": "string" },
+              "name": { "type": "string" },
+              "image": { "type": "string", "nullable": true },
+              "createdAt": { "type": "string", "format": "date-time" }
+            }
+          },
+          "session": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "token": { "type": "string" },
+              "expiresAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      },
+      "AuthError": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "code": { "type": "string" }
+        }
+      },
+      "SessionResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "email": { "type": "string" },
+              "name": { "type": "string" },
+              "image": { "type": "string", "nullable": true }
+            }
+          },
+          "session": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "expiresAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      },
+      "LocationUpdate": {
+        "type": "object",
+        "required": ["lat", "lng"],
+        "properties": {
+          "lat": { "type": "number", "format": "double", "minimum": -90, "maximum": 90 },
+          "lng": { "type": "number", "format": "double", "minimum": -180, "maximum": 180 },
+          "ts": { "type": "string", "format": "date-time", "description": "Client timestamp" },
+          "accuracy": { "type": "number", "format": "float", "description": "GPS accuracy in meters" }
+        }
+      },
+      "NearbyUser": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "string" },
+          "display_name": { "type": "string" },
+          "avatar_url": { "type": "string" },
+          "lat": { "type": "number", "format": "double" },
+          "lng": { "type": "number", "format": "double" },
+          "ts": { "type": "string", "format": "date-time" },
+          "distance_km": { "type": "number", "format": "float", "description": "Distance from requesting user (if lat/lng query params provided)" }
+        }
+      },
+      "Profile": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "string" },
+          "display_name": { "type": "string" },
+          "bio": { "type": "string" },
+          "avatar_url": { "type": "string" },
+          "age": { "type": "integer", "nullable": true },
+          "looking_for": { "type": "string", "nullable": true },
+          "body_type": { "type": "string", "nullable": true },
+          "position": { "type": "string", "nullable": true },
+          "is_verified": { "type": "boolean", "default": false },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ProfileUpdate": {
+        "type": "object",
+        "properties": {
+          "display_name": { "type": "string", "maxLength": 100 },
+          "bio": { "type": "string", "maxLength": 500 },
+          "avatar_url": { "type": "string", "format": "uri", "maxLength": 500 },
+          "age": { "type": "integer", "minimum": 18, "maximum": 120 },
+          "looking_for": { "type": "string", "maxLength": 200 },
+          "body_type": { "type": "string", "maxLength": 50 },
+          "position": { "type": "string", "maxLength": 50 }
+        }
+      },
+      "SendMessage": {
+        "type": "object",
+        "required": ["to_id", "content"],
+        "properties": {
+          "to_id": { "type": "string" },
+          "content": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "_hp": { "type": "string", "description": "Honeypot field -- should be empty" },
+          "_timing": { "type": "number", "description": "Milliseconds since form load. Values <500ms suggest bot." },
+          "_entropy": { "type": "number", "description": "Mouse movement entropy score. 0 = no movement (bot-like)." }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "from_id": { "type": "string" },
+          "to_id": { "type": "string" },
+          "content": { "type": "string" },
+          "read": { "type": "integer", "enum": [0, 1] },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ConversationSummary": {
+        "type": "object",
+        "properties": {
+          "other_id": { "type": "string" },
+          "display_name": { "type": "string" },
+          "avatar_url": { "type": "string" },
+          "last_message": { "type": "string" },
+          "last_message_at": { "type": "string", "format": "date-time" },
+          "unread_count": { "type": "integer" }
+        }
+      },
+      "TokenBalance": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "string" },
+          "balance": { "type": "integer" },
+          "lifetime_earned": { "type": "integer" },
+          "daily_free_remaining": { "type": "integer" },
+          "daily_reset_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AdminStats": {
+        "type": "object",
+        "properties": {
+          "users": { "type": "integer" },
+          "messages": { "type": "integer" },
+          "tokens_issued": { "type": "integer" },
+          "tokens_spent": { "type": "integer" },
+          "active_locations": { "type": "integer" },
+          "recent_users": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "email": { "type": "string" },
+                "display_name": { "type": "string" },
+                "createdAt": { "type": "string", "format": "date-time" }
+              }
+            }
+          }
+        }
+      },
+      "ReportRequest": {
+        "type": "object",
+        "required": ["reported_user_id", "reason"],
+        "properties": {
+          "reported_user_id": { "type": "string" },
+          "reason": {
+            "type": "string",
+            "enum": ["spam", "harassment", "fake_profile", "underage", "other"]
+          },
+          "details": { "type": "string", "maxLength": 1000 }
+        }
+      },
+      "SpamCheckRequest": {
+        "type": "object",
+        "properties": {
+          "honeypot": { "type": "string", "description": "Hidden form field -- must be empty" },
+          "timing_ms": { "type": "integer", "description": "Time spent on page before action (ms). <1000 = suspicious" },
+          "mouse_entropy": { "type": "number", "description": "Mouse movement randomness score. 0 = no movement" },
+          "scroll_depth": { "type": "number", "description": "How far user scrolled (0-1)" },
+          "form_focus_count": { "type": "integer", "description": "Number of form field focus events" }
+        }
+      },
+      "ValidationError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" }
+        }
+      },
+      "NotFoundError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string", "example": "not_found" }
+        }
+      },
+      "RateLimitError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string", "example": "rate_limited" },
+          "retry_after": { "type": "integer", "description": "Seconds to wait" }
+        }
+      }
+    }
+  }
+}
