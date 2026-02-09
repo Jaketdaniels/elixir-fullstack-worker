@@ -13,3 +13,5 @@ packages/elixir_workers/priv/stdlib/
 .env
 .dev.vars
 _screenshots/
+vendor/
+openapi.json
