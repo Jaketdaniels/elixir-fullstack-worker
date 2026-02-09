@@ -33,8 +33,8 @@
   ],
 
   // Environment variables
+  // BETTER_AUTH_SECRET is loaded from .dev.vars (local) or Workers secrets (production)
   "vars": {
-    "BETTER_AUTH_SECRET": "change-me-in-production",
     "BETTER_AUTH_URL": "http://localhost:<%= @port %>"
   }
 }

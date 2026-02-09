@@ -1,44 +1,106 @@
 import wasm from "../atomvm.wasm";
 import avm from "../app.avm";
 import { betterAuth } from "better-auth";
+import { Kysely } from "kysely";
+import { D1Dialect } from "kysely-d1";
 
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 let A = null;
 const getAvm = () => (A ??= new Uint8Array(avm));
 
+// --- Rate Limiter (in-memory per-isolate) ---
+
+const rateLimits = new Map();
+
+function checkRateLimit(key, maxRequests, windowMs) {
+  const now = Date.now();
+  let entry = rateLimits.get(key);
+  if (!entry || now - entry.start > windowMs) {
+    entry = { start: now, count: 1 };
+    rateLimits.set(key, entry);
+    return { allowed: true, remaining: maxRequests - 1 };
+  }
+  entry.count++;
+  if (entry.count > maxRequests) {
+    const retryAfter = Math.ceil((entry.start + windowMs - now) / 1000);
+    return { allowed: false, remaining: 0, retryAfter };
+  }
+  return { allowed: true, remaining: maxRequests - entry.count };
+}
+
+// Cleanup stale entries periodically
+function cleanupRateLimits() {
+  const now = Date.now();
+  for (const [key, entry] of rateLimits) {
+    if (now - entry.start > 3600000) rateLimits.delete(key);
+  }
+}
+
+// --- Device Fingerprint ---
+
+function extractFingerprint(request) {
+  const ua = request.headers.get("user-agent") || "";
+  const accept = request.headers.get("accept") || "";
+  const lang = request.headers.get("accept-language") || "";
+  const enc = request.headers.get("accept-encoding") || "";
+  // Simple hash from headers
+  let hash = 0;
+  const str = ua + accept + lang + enc;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+}
+
+// --- Spam Score ---
+
+function calculateSpamScore(request, body) {
+  let score = 1.0; // 1.0 = definitely human, 0.0 = definitely bot
+
+  const ua = request.headers.get("user-agent") || "";
+  if (!ua || ua.length < 10) score *= 0.3;
+
+  // Check for common bot UA patterns
+  if (/bot|crawl|spider|scrape|curl|wget|python|axios/i.test(ua)) score *= 0.1;
+
+  // Check honeypot field if present in body
+  if (body && typeof body === "object") {
+    if (body._hp && body._hp.length > 0) score = 0;
+    if (body._timing && body._timing < 500) score *= 0.3;
+    if (body._entropy !== undefined && body._entropy === 0) score *= 0.5;
+  }
+
+  return score;
+}
+
 // --- Better Auth ---
 
 function createAuth(env) {
   const db = env.DB;
+  const kyselyDb = new Kysely({ dialect: new D1Dialect({ database: db }) });
   return betterAuth({
-    database: db,
+    database: { db: kyselyDb, type: "sqlite" },
     baseURL: env.BETTER_AUTH_URL || undefined,
     secret: env.BETTER_AUTH_SECRET || "dev-secret-change-me",
     emailAndPassword: { enabled: true },
     user: {
       additionalFields: { name: { type: "string", required: false } },
     },
-    hooks: {
-      after: [
-        {
-          matcher(context) { return context.path === "/sign-up/email"; },
-          async handler(ctx) {
-            // Initialize profile and tokens for new users
-            if (ctx.response && ctx.responseBody?.user?.id) {
-              const userId = ctx.responseBody.user.id;
-              const name = ctx.responseBody.user.name || "";
-              try {
-                await db.batch([
-                  db.prepare("INSERT OR IGNORE INTO profiles (user_id, display_name) VALUES (?, ?)").bind(userId, name),
-                  db.prepare("INSERT OR IGNORE INTO tokens (user_id) VALUES (?)").bind(userId),
-                ]);
-              } catch (e) {
-                console.error("Post-signup hook error:", e.message);
-              }
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (user) => {
+            try {
+              await db.batch([
+                db.prepare("INSERT OR IGNORE INTO profiles (user_id, display_name) VALUES (?, ?)").bind(user.id, user.name || ""),
+                db.prepare("INSERT OR IGNORE INTO tokens (user_id) VALUES (?)").bind(user.id),
+              ]);
+            } catch (e) {
+              console.error("Post-signup hook error:", e.message);
             }
           },
         },
-      ],
+      },
     },
   });
 }
@@ -226,7 +288,6 @@ function parseOutput(out) {
 
 // --- Env Extraction ---
 
-// Extract plain string env vars (skip KV/D1/R2 binding objects).
 function extractEnvVars(workerEnv) {
   const vars = {};
   for (const key of Object.keys(workerEnv)) {
@@ -240,7 +301,6 @@ function extractEnvVars(workerEnv) {
 
 // --- Binding Fulfillment ---
 
-// Fulfill all binding needs from a _needs response. Returns a bindings map.
 async function fulfillNeeds(needs, workerEnv) {
   const bindings = {};
 
@@ -301,7 +361,6 @@ async function fulfillNeeds(needs, workerEnv) {
 
 // --- Effect Execution ---
 
-// Execute write effects after the response is sent.
 async function executeEffects(effects, workerEnv) {
   for (const eff of effects) {
     try {
@@ -357,6 +416,9 @@ export default {
     try {
       const url = new URL(request.url);
 
+      // Periodic cleanup
+      if (Math.random() < 0.01) cleanupRateLimits();
+
       // Serve Elixir drop favicon
       if (url.pathname === "/favicon.ico" || url.pathname === "/favicon.svg") {
         return new Response(FAVICON_SVG, {
@@ -366,15 +428,30 @@ export default {
 
       // Better Auth handles /api/auth/* routes
       if (url.pathname.startsWith("/api/auth")) {
+        // Rate limit auth endpoints
+        const ip = request.headers.get("cf-connecting-ip") || "unknown";
+        const rl = checkRateLimit("auth:" + ip, 20, 60000);
+        if (!rl.allowed) {
+          return new Response(JSON.stringify({ error: "rate_limited", retry_after: rl.retryAfter }), {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+              "retry-after": String(rl.retryAfter),
+              "x-ratelimit-remaining": "0",
+            },
+          });
+        }
+
         const auth = createAuth(workerEnv);
         return auth.handler(request);
       }
 
-      // Database migration endpoint (run once to set up Better Auth tables)
+      // Database migration endpoint
       if (url.pathname === "/migrate" && request.method === "POST") {
         try {
-          const { getMigrations } = await import("better-auth/db/migration");
-          const authConfig = { database: workerEnv.DB, secret: workerEnv.BETTER_AUTH_SECRET || "dev-secret-change-me", emailAndPassword: { enabled: true } };
+          const { getMigrations } = await import("better-auth/db");
+          const migrationDb = new Kysely({ dialect: new D1Dialect({ database: workerEnv.DB }) });
+          const authConfig = { database: { db: migrationDb, type: "sqlite" }, secret: workerEnv.BETTER_AUTH_SECRET || "dev-secret-change-me", emailAndPassword: { enabled: true } };
           const { toBeCreated, toBeAdded, runMigrations } = await getMigrations(authConfig);
           if (toBeCreated.length === 0 && toBeAdded.length === 0) {
             return new Response(JSON.stringify({ message: "No migrations needed" }), { headers: { "content-type": "application/json" } });
@@ -386,16 +463,32 @@ export default {
         }
       }
 
+      // Rate limit API write endpoints
+      if (url.pathname.startsWith("/api/") && request.method === "POST") {
+        const ip = request.headers.get("cf-connecting-ip") || "unknown";
+        const rl = checkRateLimit("api:" + ip, 60, 60000);
+        if (!rl.allowed) {
+          return new Response(JSON.stringify({ error: "rate_limited", retry_after: rl.retryAfter }), {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+              "retry-after": String(rl.retryAfter),
+              "x-ratelimit-remaining": "0",
+            },
+          });
+        }
+      }
+
       // Extract session for all other routes
       let authData = null;
       try {
         const auth = createAuth(workerEnv);
         const session = await auth.api.getSession({ headers: request.headers });
         if (session?.user) {
-          authData = { userId: session.user.id, email: session.user.email, name: session.user.name || "" };
+          authData = { userId: session.user.id, email: session.user.email, name: session.user.name || "", image: session.user.image || "" };
         }
       } catch (e) {
-        // No session — continue as unauthenticated
+        console.log("Session extraction skipped:", e.message || "no session");
       }
 
       // Extract headers
@@ -419,6 +512,18 @@ export default {
         }
       }
 
+      // Calculate spam score for write operations
+      let parsedBody = null;
+      if (body && request.headers.get("content-type")?.includes("application/json")) {
+        try { parsedBody = JSON.parse(body); } catch (e) { /* ignore */ }
+      }
+      const spamScore = (request.method === "POST" || request.method === "PUT")
+        ? calculateSpamScore(request, parsedBody)
+        : 1.0;
+
+      // Device fingerprint
+      const fingerprint = extractFingerprint(request);
+
       // Build enriched request for Elixir
       const enrichedReq = {
         method: request.method,
@@ -427,7 +532,12 @@ export default {
         body,
         env: extractEnvVars(workerEnv),
         cf: request.cf ? { ...request.cf } : {},
-        _state: { auth: authData },
+        _state: {
+          auth: authData,
+          _fingerprint: fingerprint,
+          _spam_score: spamScore,
+          _now: new Date().toISOString(),
+        },
       };
 
       // Pass 1: run WASM
@@ -444,7 +554,13 @@ export default {
         const bindings = await fulfillNeeds(result._needs, workerEnv);
 
         enrichedReq.bindings = bindings;
-        enrichedReq._state = { auth: authData, ...(result._state || {}) };
+        enrichedReq._state = {
+          auth: authData,
+          _fingerprint: fingerprint,
+          _spam_score: spamScore,
+          _now: new Date().toISOString(),
+          ...(result._state || {}),
+        };
 
         result = runWasm(JSON.stringify(enrichedReq));
 
@@ -462,7 +578,7 @@ export default {
 
       // Return HTTP response
       const respHeaders = { ...result.headers };
-      delete respHeaders._effects; // clean up internal fields
+      delete respHeaders._effects;
       return new Response(result.body, { status: result.status, headers: respHeaders });
     } catch (e) {
       console.error("Worker error:", e.message || "unknown", e.stack || "");

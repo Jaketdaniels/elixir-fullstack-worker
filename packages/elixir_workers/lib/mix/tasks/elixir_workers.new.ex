@@ -25,7 +25,6 @@ defmodule Mix.Tasks.ElixirWorkers.New do
       $ cd my_app
       $ mix deps.get
       $ wrangler d1 create phoenix-db
-      $ wrangler d1 execute phoenix-db --local --file=schema.sql
       $ mix elixir_workers.dev
   """
 
@@ -92,6 +91,11 @@ defmodule Mix.Tasks.ElixirWorkers.New do
     File.write!(Path.join(project_dir, ".gitignore"), gitignore_content())
     created(".gitignore")
 
+    # Generate .dev.vars with a random Better Auth secret
+    secret = generate_secret()
+    File.write!(Path.join(project_dir, ".dev.vars"), "BETTER_AUTH_SECRET=#{secret}\n")
+    created(".dev.vars")
+
     IO.puts("")
     IO.puts("  #{IO.ANSI.green()}#{IO.ANSI.bright()}Your project is ready!#{IO.ANSI.reset()}")
     IO.puts("")
@@ -100,7 +104,6 @@ defmodule Mix.Tasks.ElixirWorkers.New do
     IO.puts("      cd #{name}")
     IO.puts("      mix deps.get")
     IO.puts("      wrangler d1 create phoenix-db")
-    IO.puts("      wrangler d1 execute phoenix-db --local --file=schema.sql")
     IO.puts("      mix elixir_workers.dev")
     IO.puts("")
     IO.puts("  #{IO.ANSI.faint()}Then visit http://localhost:8797#{IO.ANSI.reset()}")
@@ -129,6 +132,10 @@ defmodule Mix.Tasks.ElixirWorkers.New do
     IO.puts("  #{IO.ANSI.green()}+#{IO.ANSI.reset()} #{path}")
   end
 
+  defp generate_secret do
+    :crypto.strong_rand_bytes(32) |> Base.encode64()
+  end
+
   defp gitignore_content do
     """
     /_build/
@@ -136,6 +143,7 @@ defmodule Mix.Tasks.ElixirWorkers.New do
     /node_modules/
     *.ez
     .elixir_ls/
+    .dev.vars
     """
   end
 end

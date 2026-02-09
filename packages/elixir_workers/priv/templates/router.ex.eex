@@ -5,39 +5,76 @@ defmodule <%= @app_module %>.Router do
 
   defp routes do
     [
-      # Public pages
-      {"GET", [], &page_landing/1},
-      {"GET", ["login"], &page_login/1},
-      {"GET", ["signup"], &page_signup/1},
+      # SPA shell — serves full HTML on first load, all navigation via JS
+      {"GET", [], &page_shell/1},
+      {"GET", ["login"], &page_shell/1},
+      {"GET", ["signup"], &page_shell/1},
+      {"GET", ["app"], &page_shell_auth/1},
+      {"GET", ["profile"], &page_shell_auth/1},
+      {"GET", ["profile", ":id"], &page_shell_auth/1},
+      {"GET", ["messages"], &page_shell_auth/1},
+      {"GET", ["messages", ":id"], &page_shell_auth/1},
+      {"GET", ["tokens"], &page_shell_auth/1},
+      {"GET", ["admin"], &page_shell_auth/1},
+      {"GET", ["settings"], &page_shell_auth/1},
 
-      # Authenticated pages
-      {"GET", ["app"], &page_map/1},
-      {"GET", ["profile"], &page_profile/1},
-      {"GET", ["profile", ":id"], &page_profile_view/1},
-      {"GET", ["messages"], &page_messages/1},
-      {"GET", ["messages", ":id"], &page_conversation/1},
-      {"GET", ["tokens"], &page_tokens/1},
-      {"GET", ["admin"], &page_admin/1},
+      # Fragment endpoints — return HTML partials for SPA navigation
+      {"GET", ["_fragment", "landing"], &frag_landing/1},
+      {"GET", ["_fragment", "login"], &frag_login/1},
+      {"GET", ["_fragment", "signup"], &frag_signup/1},
+      {"GET", ["_fragment", "map"], &frag_map/1},
+      {"GET", ["_fragment", "profile"], &frag_profile/1},
+      {"GET", ["_fragment", "profile", ":id"], &frag_profile_view/1},
+      {"GET", ["_fragment", "messages"], &frag_messages/1},
+      {"GET", ["_fragment", "messages", ":id"], &frag_conversation/1},
+      {"GET", ["_fragment", "tokens"], &frag_tokens/1},
+      {"GET", ["_fragment", "admin"], &frag_admin/1},
+      {"GET", ["_fragment", "settings"], &frag_settings/1},
 
       # Static assets
       {"GET", ["app.js"], &asset_js/1},
       {"GET", ["app.css"], &asset_css/1},
 
-      # API routes
+      # API — health
       {"GET", ["api", "health"], &api_health/1},
+
+      # API — location
       {"POST", ["api", "location"], &api_location_update/1},
       {"GET", ["api", "nearby"], &api_nearby/1},
+
+      # API — profile
       {"GET", ["api", "profile", ":id"], &api_profile_get/1},
       {"PUT", ["api", "profile"], &api_profile_update/1},
+
+      # API — messages
       {"POST", ["api", "messages"], &api_message_send/1},
       {"GET", ["api", "messages", ":id"], &api_conversation/1},
+      {"GET", ["api", "conversations"], &api_conversations/1},
+      {"POST", ["api", "messages", ":id", "read"], &api_mark_read/1},
+
+      # API — tokens
       {"GET", ["api", "tokens"], &api_tokens_get/1},
       {"POST", ["api", "tokens", "purchase"], &api_tokens_purchase/1},
+      {"POST", ["api", "tokens", "daily"], &api_tokens_daily/1},
+
+      # API — moderation
+      {"POST", ["api", "report"], &api_report/1},
+      {"POST", ["api", "block"], &api_block/1},
+      {"DELETE", ["api", "block"], &api_unblock/1},
+      {"GET", ["api", "blocks"], &api_blocks_list/1},
+
+      # API — notifications
+      {"GET", ["api", "notifications", "unread"], &api_unread_count/1},
+
+      # API — anti-spam
+      {"POST", ["api", "spam", "check"], &api_spam_check/1},
+
+      # API — admin
       {"GET", ["api", "admin", "stats"], &api_admin_stats/1}
     ]
   end
 
-  # --- Auth helper ---
+  # --- Auth helpers ---
 
   defp get_auth(conn) do
     conn["_state"]["auth"]
@@ -57,71 +94,157 @@ defmodule <%= @app_module %>.Router do
     end
   end
 
-  # --- Public pages ---
+  # --- Rate limiting helper ---
 
-  defp page_landing(conn) do
-    case get_auth(conn) do
-      nil -> Conn.html(conn, 200, <%= @app_module %>.Views.landing())
-      _auth -> Conn.redirect(conn, "/app")
-    end
-  end
+  defp check_rate_limit(conn, key, max_count, window_seconds) do
+    now = conn["_state"]["_now"] || ""
+    {conn, existing} = D1.query_one(conn, "DB",
+      "SELECT count, window_start FROM rate_limits WHERE key = ? AND expires_at > ?",
+      [key, now])
 
-  defp page_login(conn) do
-    Conn.html(conn, 200, <%= @app_module %>.Views.login())
-  end
-
-  defp page_signup(conn) do
-    Conn.html(conn, 200, <%= @app_module %>.Views.signup())
-  end
-
-  # --- Authenticated pages ---
-
-  defp page_map(conn) do
-    case require_auth(conn) do
-      {:error, conn} -> conn
-      {:ok, conn, auth} ->
-        Conn.html(conn, 200, <%= @app_module %>.Views.map_page(auth))
-    end
-  end
-
-  defp page_profile(conn) do
-    case require_auth(conn) do
-      {:error, conn} -> conn
-      {:ok, conn, auth} ->
-        {conn, profile} = D1.query_one(conn, "DB",
-          "SELECT * FROM profiles WHERE user_id = ?", [auth["userId"]])
-        Conn.html(conn, 200, <%= @app_module %>.Views.profile_edit(auth, profile || %{}))
-    end
-  end
-
-  defp page_profile_view(conn) do
-    case require_auth(conn) do
-      {:error, conn} -> conn
-      {:ok, conn, auth} ->
-        id = conn["path_params"]["id"]
-        {conn, profile} = D1.query_one(conn, "DB",
-          "SELECT p.*, u.email FROM profiles p JOIN user u ON p.user_id = u.id WHERE p.user_id = ?", [id])
-        case profile do
-          nil -> Conn.html(conn, 404, <%= @app_module %>.Views.not_found_page())
-          _ -> Conn.html(conn, 200, <%= @app_module %>.Views.profile_view(auth, profile))
+    case existing do
+      nil ->
+        expires = window_seconds
+        conn = D1.exec(conn, "DB",
+          "INSERT OR REPLACE INTO rate_limits (key, count, window_start, expires_at) VALUES (?, 1, datetime('now'), datetime('now', '+' || ? || ' seconds'))",
+          [key, expires])
+        {:ok, conn, max_count - 1}
+      r ->
+        count = r["count"] || 0
+        if count >= max_count do
+          {:error, conn, 0}
+        else
+          conn = D1.exec(conn, "DB",
+            "UPDATE rate_limits SET count = count + 1 WHERE key = ?", [key])
+          {:ok, conn, max_count - count - 1}
         end
     end
   end
 
-  defp page_messages(conn) do
+  # --- Anti-spam helper ---
+
+  defp check_spam(body) do
+    hp = body["_hp"] || ""
+    timing = body["_timing"]
+    entropy = body["_entropy"]
+
+    cond do
+      byte_size(hp) > 0 -> {:spam, "honeypot"}
+      is_number(timing) and timing < 500 -> {:suspicious, "fast_submit"}
+      is_number(entropy) and entropy == 0 -> {:suspicious, "no_mouse"}
+      true -> :ok
+    end
+  end
+
+  # --- SPA shell pages ---
+
+  defp page_shell(conn) do
+    auth = get_auth(conn)
+    if auth != nil do
+      Conn.redirect(conn, "/app")
+    else
+      path = conn["url"] || "/"
+      path = case :binary.match(path, "?") do
+        {pos, _} -> :binary.part(path, 0, pos)
+        :nomatch -> path
+      end
+
+      route = case path do
+        "/login" -> "login"
+        "/signup" -> "signup"
+        _ -> "landing"
+      end
+
+      Conn.html(conn, 200, <%= @app_module %>.Views.spa_shell(nil, route))
+    end
+  end
+
+  defp page_shell_auth(conn) do
     case require_auth(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        path = conn["url"] || "/app"
+        path = case :binary.match(path, "?") do
+          {pos, _} -> :binary.part(path, 0, pos)
+          :nomatch -> path
+        end
+
+        route = cond do
+          path == "/app" -> "map"
+          path == "/profile" -> "profile"
+          path == "/messages" -> "messages"
+          path == "/tokens" -> "tokens"
+          path == "/admin" -> "admin"
+          path == "/settings" -> "settings"
+          :binary.match(path, "/profile/") != :nomatch -> "profile-view"
+          :binary.match(path, "/messages/") != :nomatch -> "conversation"
+          true -> "map"
+        end
+
+        Conn.html(conn, 200, <%= @app_module %>.Views.spa_shell(auth, route))
+    end
+  end
+
+  # --- Fragment endpoints (HTML partials for SPA) ---
+
+  defp frag_landing(conn) do
+    Conn.html(conn, 200, <%= @app_module %>.Views.frag_landing())
+  end
+
+  defp frag_login(conn) do
+    Conn.html(conn, 200, <%= @app_module %>.Views.frag_login())
+  end
+
+  defp frag_signup(conn) do
+    Conn.html(conn, 200, <%= @app_module %>.Views.frag_signup())
+  end
+
+  defp frag_map(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_map(auth))
+    end
+  end
+
+  defp frag_profile(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        {conn, profile} = D1.query_one(conn, "DB",
+          "SELECT * FROM profiles WHERE user_id = ?", [auth["userId"]])
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_profile_edit(auth, profile || %{}))
+    end
+  end
+
+  defp frag_profile_view(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        id = conn["path_params"]["id"]
+        {conn, profile} = D1.query_one(conn, "DB",
+          "SELECT p.* FROM profiles p WHERE p.user_id = ?", [id])
+        case profile do
+          nil -> Conn.html(conn, 404, "<div class=\"dp-container dp-page dp-center\"><h1>404</h1><p class=\"dp-muted\">User not found</p></div>")
+          _ -> Conn.html(conn, 200, <%= @app_module %>.Views.frag_profile_view(auth, profile))
+        end
+    end
+  end
+
+  defp frag_messages(conn) do
+    case require_auth_api(conn) do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         uid = auth["userId"]
         {conn, convos} = D1.query(conn, "DB",
-          "SELECT m.*, p.display_name, CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END as other_id FROM messages m LEFT JOIN profiles p ON p.user_id = CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END WHERE m.from_id = ? OR m.to_id = ? ORDER BY m.created_at DESC LIMIT 50",
-          [uid, uid, uid, uid])
-        Conn.html(conn, 200, <%= @app_module %>.Views.messages_page(auth, convos || []))
+          "SELECT m.content, m.created_at, m.from_id, m.to_id, m.read, p.display_name, p.avatar_url, CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END as other_id FROM messages m LEFT JOIN profiles p ON p.user_id = CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END WHERE m.id IN (SELECT MAX(id) FROM messages WHERE from_id = ? OR to_id = ? GROUP BY CASE WHEN from_id = ? THEN to_id ELSE from_id END) ORDER BY m.created_at DESC LIMIT 50",
+          [uid, uid, uid, uid, uid])
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_messages(auth, convos || []))
     end
   end
 
-  defp page_conversation(conn) do
-    case require_auth(conn) do
+  defp frag_conversation(conn) do
+    case require_auth_api(conn) do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         other_id = conn["path_params"]["id"]
@@ -136,22 +259,22 @@ defmodule <%= @app_module %>.Router do
           "UPDATE messages SET read = 1 WHERE to_id = ? AND from_id = ? AND read = 0",
           [uid, other_id])
 
-        Conn.html(conn, 200, <%= @app_module %>.Views.conversation_page(auth, other_profile || %{}, msgs || []))
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_conversation(auth, other_profile || %{}, msgs || []))
     end
   end
 
-  defp page_tokens(conn) do
-    case require_auth(conn) do
+  defp frag_tokens(conn) do
+    case require_auth_api(conn) do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         {conn, tokens} = D1.query_one(conn, "DB",
           "SELECT * FROM tokens WHERE user_id = ?", [auth["userId"]])
-        Conn.html(conn, 200, <%= @app_module %>.Views.tokens_page(auth, tokens || %{}))
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_tokens(auth, tokens || %{}))
     end
   end
 
-  defp page_admin(conn) do
-    case require_auth(conn) do
+  defp frag_admin(conn) do
+    case require_auth_api(conn) do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         {conn, user_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM user", [])
@@ -160,15 +283,30 @@ defmodule <%= @app_module %>.Router do
           "SELECT SUM(lifetime_earned) as issued, SUM(lifetime_earned - balance) as spent FROM tokens", [])
         {conn, recent_users} = D1.query(conn, "DB",
           "SELECT u.id, u.email, u.createdAt, p.display_name FROM user u LEFT JOIN profiles p ON p.user_id = u.id ORDER BY u.createdAt DESC LIMIT 10", [])
+        {conn, report_count} = D1.query_one(conn, "DB",
+          "SELECT COUNT(*) as count FROM reports WHERE status = 'pending'", [])
 
         stats = %{
           "users" => (user_count || %{})["count"] || 0,
           "messages" => (msg_count || %{})["count"] || 0,
           "tokens_issued" => (token_stats || %{})["issued"] || 0,
           "tokens_spent" => (token_stats || %{})["spent"] || 0,
+          "pending_reports" => (report_count || %{})["count"] || 0,
           "recent_users" => recent_users || []
         }
-        Conn.html(conn, 200, <%= @app_module %>.Views.admin_page(auth, stats))
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_admin(auth, stats))
+    end
+  end
+
+  defp frag_settings(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        {conn, profile} = D1.query_one(conn, "DB",
+          "SELECT * FROM profiles WHERE user_id = ?", [auth["userId"]])
+        {conn, block_count} = D1.query_one(conn, "DB",
+          "SELECT COUNT(*) as count FROM blocks WHERE blocker_id = ?", [auth["userId"]])
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_settings(auth, profile || %{}, (block_count || %{})["count"] || 0))
     end
   end
 
@@ -207,18 +345,24 @@ defmodule <%= @app_module %>.Router do
           {_, nil} -> Conn.json(conn, 400, %{"error" => "lng required"})
           _ ->
             {conn, profile} = D1.query_one(conn, "DB",
-              "SELECT display_name FROM profiles WHERE user_id = ?", [auth["userId"]])
+              "SELECT display_name, avatar_url FROM profiles WHERE user_id = ?", [auth["userId"]])
 
             display_name = case profile do
-              nil -> "Anonymous"
-              p -> p["display_name"] || "Anonymous"
+              nil -> auth["name"] || "Anonymous"
+              p -> p["display_name"] || auth["name"] || "Anonymous"
+            end
+
+            avatar = case profile do
+              nil -> auth["image"] || ""
+              p -> p["avatar_url"] || auth["image"] || ""
             end
 
             location_data = ElixirWorkers.JSON.encode(%{
               "lat" => lat, "lng" => lng,
               "ts" => body["ts"] || "",
               "user_id" => auth["userId"],
-              "display_name" => display_name
+              "display_name" => display_name,
+              "avatar_url" => avatar
             })
 
             conn = KV.put(conn, "LOCATIONS", "loc:" <> auth["userId"], location_data,
@@ -231,29 +375,51 @@ defmodule <%= @app_module %>.Router do
   defp api_nearby(conn) do
     case require_auth_api(conn) do
       {:error, conn} -> conn
-      {:ok, conn, _auth} ->
+      {:ok, conn, auth} ->
+        # Get blocked user IDs to filter
+        uid = auth["userId"]
+        {conn, blocked_rows} = D1.query(conn, "DB",
+          "SELECT blocked_id FROM blocks WHERE blocker_id = ? UNION SELECT blocker_id FROM blocks WHERE blocked_id = ?",
+          [uid, uid])
+        blocked_ids = case blocked_rows do
+          nil -> []
+          rows -> map_vals(rows, "blocked_id")
+        end
+
         {conn, result} = KV.list(conn, "LOCATIONS", %{"prefix" => "loc:"})
         case result do
           nil -> Conn.json(conn, 200, %{"users" => []})
           r ->
             keys = r["keys"] || []
-            {conn, locations} = fetch_locations(conn, keys, [])
+            {conn, locations} = fetch_locations(conn, keys, [], blocked_ids)
             Conn.json(conn, 200, %{"users" => locations})
         end
     end
   end
 
-  defp fetch_locations(conn, [], acc), do: {conn, :lists.reverse(acc)}
-  defp fetch_locations(conn, [key | rest], acc) do
+  defp fetch_locations(conn, [], acc, _blocked), do: {conn, :lists.reverse(acc)}
+  defp fetch_locations(conn, [key | rest], acc, blocked) do
     name = key["name"]
     {conn, value} = KV.get(conn, "LOCATIONS", name)
     case value do
-      nil -> fetch_locations(conn, rest, acc)
+      nil -> fetch_locations(conn, rest, acc, blocked)
       v ->
         parsed = ElixirWorkers.JSON.decode(v)
-        fetch_locations(conn, rest, [parsed | acc])
+        user_id = parsed["user_id"] || ""
+        if list_member?(blocked, user_id) do
+          fetch_locations(conn, rest, acc, blocked)
+        else
+          fetch_locations(conn, rest, [parsed | acc], blocked)
+        end
     end
   end
+
+  defp list_member?([], _), do: false
+  defp list_member?([h | _], h), do: true
+  defp list_member?([_ | t], val), do: list_member?(t, val)
+
+  defp map_vals([], _key), do: []
+  defp map_vals([h | t], key), do: [h[key] | map_vals(t, key)]
 
   defp api_profile_get(conn) do
     case require_auth_api(conn) do
@@ -261,7 +427,7 @@ defmodule <%= @app_module %>.Router do
       {:ok, conn, _auth} ->
         id = conn["path_params"]["id"]
         {conn, profile} = D1.query_one(conn, "DB",
-          "SELECT * FROM profiles WHERE user_id = ?", [id])
+          "SELECT user_id, display_name, bio, avatar_url, age, looking_for, body_type, position, is_verified, created_at FROM profiles WHERE user_id = ?", [id])
         case profile do
           nil -> Conn.json(conn, 404, %{"error" => "not_found"})
           _ -> Conn.json(conn, 200, profile)
@@ -277,10 +443,14 @@ defmodule <%= @app_module %>.Router do
         display_name = body["display_name"] || ""
         bio = body["bio"] || ""
         avatar_url = body["avatar_url"] || ""
+        age = body["age"]
+        looking_for = body["looking_for"] || ""
+        body_type_val = body["body_type"] || ""
+        position = body["position"] || ""
 
         conn = D1.exec(conn, "DB",
-          "INSERT INTO profiles (user_id, display_name, bio, avatar_url) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name, bio = excluded.bio, avatar_url = excluded.avatar_url",
-          [auth["userId"], display_name, bio, avatar_url])
+          "INSERT INTO profiles (user_id, display_name, bio, avatar_url, age, looking_for, body_type, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name, bio = excluded.bio, avatar_url = excluded.avatar_url, age = excluded.age, looking_for = excluded.looking_for, body_type = excluded.body_type, position = excluded.position",
+          [auth["userId"], display_name, bio, avatar_url, age, looking_for, body_type_val, position])
         Conn.json(conn, 200, %{"ok" => true})
     end
   end
@@ -296,25 +466,42 @@ defmodule <%= @app_module %>.Router do
         cond do
           to_id == nil -> Conn.json(conn, 400, %{"error" => "to_id required"})
           content == nil -> Conn.json(conn, 400, %{"error" => "content required"})
+          byte_size(content || "") > 2000 -> Conn.json(conn, 400, %{"error" => "content too long"})
           true ->
-            {conn, token_row} = D1.query_one(conn, "DB",
-              "SELECT balance FROM tokens WHERE user_id = ?", [auth["userId"]])
+            # Anti-spam check
+            case check_spam(body) do
+              {:spam, _reason} ->
+                Conn.json(conn, 200, %{"sent" => true, "tokens_remaining" => 0})
+              _ ->
+                # Check if blocked
+                uid = auth["userId"]
+                {conn, block} = D1.query_one(conn, "DB",
+                  "SELECT 1 as b FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
+                  [uid, to_id, to_id, uid])
 
-            balance = case token_row do
-              nil -> 0
-              r -> r["balance"] || 0
-            end
+                if block != nil do
+                  Conn.json(conn, 403, %{"error" => "blocked"})
+                else
+                  {conn, token_row} = D1.query_one(conn, "DB",
+                    "SELECT balance FROM tokens WHERE user_id = ?", [uid])
 
-            if balance > 0 do
-              conn = D1.batch(conn, "DB", [
-                %{"sql" => "UPDATE tokens SET balance = balance - 1 WHERE user_id = ?",
-                  "params" => [auth["userId"]]},
-                %{"sql" => "INSERT INTO messages (from_id, to_id, content) VALUES (?, ?, ?)",
-                  "params" => [auth["userId"], to_id, content]}
-              ])
-              Conn.json(conn, 201, %{"sent" => true, "tokens_remaining" => balance - 1})
-            else
-              Conn.json(conn, 402, %{"error" => "insufficient_tokens"})
+                  balance = case token_row do
+                    nil -> 0
+                    r -> r["balance"] || 0
+                  end
+
+                  if balance > 0 do
+                    conn = D1.batch(conn, "DB", [
+                      %{"sql" => "UPDATE tokens SET balance = balance - 1 WHERE user_id = ?",
+                        "params" => [uid]},
+                      %{"sql" => "INSERT INTO messages (from_id, to_id, content) VALUES (?, ?, ?)",
+                        "params" => [uid, to_id, content]}
+                    ])
+                    Conn.json(conn, 201, %{"sent" => true, "tokens_remaining" => balance - 1})
+                  else
+                    Conn.json(conn, 402, %{"error" => "insufficient_tokens"})
+                  end
+                end
             end
         end
     end
@@ -330,6 +517,38 @@ defmodule <%= @app_module %>.Router do
           "SELECT * FROM messages WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) ORDER BY created_at ASC LIMIT 100",
           [uid, other_id, other_id, uid])
         Conn.json(conn, 200, %{"messages" => msgs || []})
+    end
+  end
+
+  defp api_conversations(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        uid = auth["userId"]
+        {conn, convos} = D1.query(conn, "DB",
+          "SELECT m.content as last_message, m.created_at as last_message_at, m.from_id, m.to_id, p.display_name, p.avatar_url, CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END as other_id, (SELECT COUNT(*) FROM messages m2 WHERE m2.from_id = CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END AND m2.to_id = ? AND m2.read = 0) as unread_count FROM messages m LEFT JOIN profiles p ON p.user_id = CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END WHERE m.id IN (SELECT MAX(id) FROM messages WHERE from_id = ? OR to_id = ? GROUP BY CASE WHEN from_id = ? THEN to_id ELSE from_id END) ORDER BY m.created_at DESC LIMIT 50",
+          [uid, uid, uid, uid, uid, uid, uid])
+
+        {conn, unread_total} = D1.query_one(conn, "DB",
+          "SELECT COUNT(*) as count FROM messages WHERE to_id = ? AND read = 0", [uid])
+
+        Conn.json(conn, 200, %{
+          "conversations" => convos || [],
+          "unread_total" => (unread_total || %{})["count"] || 0
+        })
+    end
+  end
+
+  defp api_mark_read(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        other_id = conn["path_params"]["id"]
+        uid = auth["userId"]
+        conn = D1.exec(conn, "DB",
+          "UPDATE messages SET read = 1 WHERE to_id = ? AND from_id = ? AND read = 0",
+          [uid, other_id])
+        Conn.json(conn, 200, %{"ok" => true})
     end
   end
 
@@ -349,6 +568,7 @@ defmodule <%= @app_module %>.Router do
       {:ok, conn, auth} ->
         body = conn["parsed_body"] || %{}
         amount = body["amount"] || 100
+        amount = if is_integer(amount) and amount > 0 and amount <= 10000, do: amount, else: 100
 
         conn = D1.exec(conn, "DB",
           "UPDATE tokens SET balance = balance + ?, lifetime_earned = lifetime_earned + ? WHERE user_id = ?",
@@ -357,15 +577,175 @@ defmodule <%= @app_module %>.Router do
     end
   end
 
+  defp api_tokens_daily(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        uid = auth["userId"]
+        {conn, tokens} = D1.query_one(conn, "DB",
+          "SELECT * FROM tokens WHERE user_id = ?", [uid])
+
+        case tokens do
+          nil ->
+            conn = D1.exec(conn, "DB",
+              "INSERT INTO tokens (user_id, balance, lifetime_earned, daily_free_remaining) VALUES (?, 50, 50, 20)", [uid])
+            Conn.json(conn, 200, %{"ok" => true, "added" => 50, "balance" => 50})
+          t ->
+            daily_remaining = t["daily_free_remaining"] || 0
+            reset_at = t["daily_reset_at"] || ""
+
+            if daily_remaining > 0 do
+              add_amount = min_val(daily_remaining, 20)
+              conn = D1.exec(conn, "DB",
+                "UPDATE tokens SET balance = balance + ?, lifetime_earned = lifetime_earned + ?, daily_free_remaining = daily_free_remaining - ? WHERE user_id = ?",
+                [add_amount, add_amount, add_amount, uid])
+              new_balance = (t["balance"] || 0) + add_amount
+              Conn.json(conn, 200, %{"ok" => true, "added" => add_amount, "balance" => new_balance})
+            else
+              Conn.json(conn, 409, %{"error" => "already_claimed", "next_reset" => reset_at})
+            end
+        end
+    end
+  end
+
+  defp min_val(a, b) when a < b, do: a
+  defp min_val(_, b), do: b
+
+  # --- Moderation APIs ---
+
+  defp api_report(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        body = conn["parsed_body"] || %{}
+        reported_id = body["reported_user_id"]
+        reason = body["reason"]
+
+        cond do
+          reported_id == nil -> Conn.json(conn, 400, %{"error" => "reported_user_id required"})
+          reason == nil -> Conn.json(conn, 400, %{"error" => "reason required"})
+          true ->
+            uid = auth["userId"]
+            rl_key = "report:" <> uid
+            case check_rate_limit(conn, rl_key, 5, 3600) do
+              {:error, conn, _} ->
+                Conn.json(conn, 429, %{"error" => "rate_limited", "retry_after" => 3600})
+              {:ok, conn, _remaining} ->
+                details = body["details"] || ""
+                conn = D1.exec(conn, "DB",
+                  "INSERT INTO reports (reporter_id, reported_user_id, reason, details) VALUES (?, ?, ?, ?)",
+                  [uid, reported_id, reason, details])
+                Conn.json(conn, 201, %{"ok" => true})
+            end
+        end
+    end
+  end
+
+  defp api_block(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        body = conn["parsed_body"] || %{}
+        blocked_id = body["user_id"]
+
+        case blocked_id do
+          nil -> Conn.json(conn, 400, %{"error" => "user_id required"})
+          _ ->
+            uid = auth["userId"]
+            conn = D1.exec(conn, "DB",
+              "INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)",
+              [uid, blocked_id])
+            Conn.json(conn, 200, %{"ok" => true})
+        end
+    end
+  end
+
+  defp api_unblock(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        body = conn["parsed_body"] || %{}
+        blocked_id = body["user_id"]
+
+        case blocked_id do
+          nil -> Conn.json(conn, 400, %{"error" => "user_id required"})
+          _ ->
+            uid = auth["userId"]
+            conn = D1.exec(conn, "DB",
+              "DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?",
+              [uid, blocked_id])
+            Conn.json(conn, 200, %{"ok" => true})
+        end
+    end
+  end
+
+  defp api_blocks_list(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        uid = auth["userId"]
+        {conn, blocks} = D1.query(conn, "DB",
+          "SELECT b.blocked_id as user_id, b.created_at as blocked_at, p.display_name FROM blocks b LEFT JOIN profiles p ON p.user_id = b.blocked_id WHERE b.blocker_id = ? ORDER BY b.created_at DESC",
+          [uid])
+        Conn.json(conn, 200, %{"blocks" => blocks || []})
+    end
+  end
+
+  # --- Notifications ---
+
+  defp api_unread_count(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        uid = auth["userId"]
+        {conn, unread} = D1.query_one(conn, "DB",
+          "SELECT COUNT(*) as count FROM messages WHERE to_id = ? AND read = 0", [uid])
+        Conn.json(conn, 200, %{
+          "unread_messages" => (unread || %{})["count"] || 0,
+          "unread_notifications" => 0
+        })
+    end
+  end
+
+  # --- Anti-spam ---
+
+  defp api_spam_check(conn) do
+    body = conn["parsed_body"] || %{}
+    honeypot = body["honeypot"] || ""
+    timing = body["timing_ms"]
+    mouse = body["mouse_entropy"]
+    scroll = body["scroll_depth"]
+    focus = body["form_focus_count"]
+
+    score = 1.0
+    score = if byte_size(honeypot) > 0, do: 0.0, else: score
+    score = if is_number(timing) and timing < 1000, do: score * 0.3, else: score
+    score = if is_number(mouse) and mouse == 0, do: score * 0.5, else: score
+    score = if is_number(scroll) and scroll == 0, do: score * 0.7, else: score
+    score = if is_number(focus) and focus == 0, do: score * 0.6, else: score
+
+    Conn.json(conn, 200, %{"human" => score > 0.4, "score" => score})
+  end
+
+  # --- Admin ---
+
   defp api_admin_stats(conn) do
     case require_auth_api(conn) do
       {:error, conn} -> conn
       {:ok, conn, _auth} ->
         {conn, user_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM user", [])
         {conn, msg_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM messages", [])
+        {conn, token_stats} = D1.query_one(conn, "DB",
+          "SELECT SUM(lifetime_earned) as issued, SUM(lifetime_earned - balance) as spent FROM tokens", [])
+        {conn, report_count} = D1.query_one(conn, "DB",
+          "SELECT COUNT(*) as count FROM reports WHERE status = 'pending'", [])
+
         Conn.json(conn, 200, %{
           "users" => (user_count || %{})["count"] || 0,
-          "messages" => (msg_count || %{})["count"] || 0
+          "messages" => (msg_count || %{})["count"] || 0,
+          "tokens_issued" => (token_stats || %{})["issued"] || 0,
+          "tokens_spent" => (token_stats || %{})["spent"] || 0,
+          "pending_reports" => (report_count || %{})["count"] || 0
         })
     end
   end
