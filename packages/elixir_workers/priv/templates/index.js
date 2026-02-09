@@ -1,7 +1,6 @@
 import wasm from "../atomvm.wasm";
 import avm from "../app.avm";
 import { betterAuth } from "better-auth";
-import { d1Adapter } from "better-auth/adapters/d1";
 
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 let A = null;
@@ -12,7 +11,7 @@ const getAvm = () => (A ??= new Uint8Array(avm));
 function createAuth(env) {
   const db = env.DB;
   return betterAuth({
-    database: d1Adapter(db),
+    database: db,
     baseURL: env.BETTER_AUTH_URL || undefined,
     secret: env.BETTER_AUTH_SECRET || "dev-secret-change-me",
     emailAndPassword: { enabled: true },
@@ -369,6 +368,22 @@ export default {
       if (url.pathname.startsWith("/api/auth")) {
         const auth = createAuth(workerEnv);
         return auth.handler(request);
+      }
+
+      // Database migration endpoint (run once to set up Better Auth tables)
+      if (url.pathname === "/migrate" && request.method === "POST") {
+        try {
+          const { getMigrations } = await import("better-auth/db/migration");
+          const authConfig = { database: workerEnv.DB, secret: workerEnv.BETTER_AUTH_SECRET || "dev-secret-change-me", emailAndPassword: { enabled: true } };
+          const { toBeCreated, toBeAdded, runMigrations } = await getMigrations(authConfig);
+          if (toBeCreated.length === 0 && toBeAdded.length === 0) {
+            return new Response(JSON.stringify({ message: "No migrations needed" }), { headers: { "content-type": "application/json" } });
+          }
+          await runMigrations();
+          return new Response(JSON.stringify({ message: "Migrations complete", created: toBeCreated.map(t => t.table), added: toBeAdded.map(t => t.table) }), { headers: { "content-type": "application/json" } });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "content-type": "application/json" } });
+        }
       }
 
       // Extract session for all other routes

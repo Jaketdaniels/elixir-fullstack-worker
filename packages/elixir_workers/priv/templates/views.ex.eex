@@ -311,9 +311,9 @@ defmodule <%= @app_module %>.Views do
       "<div class=\"dp-container dp-page\">",
         "<h1>Tokens</h1>",
         "<div class=\"dp-token-stats\">",
-          token_stat("Balance", to_string(balance)),
-          token_stat("Lifetime earned", to_string(lifetime)),
-          token_stat("Daily free left", to_string(daily)),
+          token_stat("Balance", stringify(balance)),
+          token_stat("Lifetime earned", stringify(lifetime)),
+          token_stat("Daily free left", stringify(daily)),
         "</div>",
         "<div class=\"dp-token-actions\">",
           "<h3>Get more tokens</h3>",
@@ -354,10 +354,10 @@ defmodule <%= @app_module %>.Views do
       "<div class=\"dp-container dp-page\">",
         "<h1>Admin Dashboard</h1>",
         "<div class=\"dp-admin-stats\">",
-          admin_stat("Users", to_string(stats["users"] || 0)),
-          admin_stat("Messages", to_string(stats["messages"] || 0)),
-          admin_stat("Tokens issued", to_string(stats["tokens_issued"] || 0)),
-          admin_stat("Tokens spent", to_string(stats["tokens_spent"] || 0)),
+          admin_stat("Users", stringify(stats["users"] || 0)),
+          admin_stat("Messages", stringify(stats["messages"] || 0)),
+          admin_stat("Tokens issued", stringify(stats["tokens_issued"] || 0)),
+          admin_stat("Tokens spent", stringify(stats["tokens_spent"] || 0)),
         "</div>",
         "<h2>Recent signups</h2>",
         "<table class=\"dp-table\">",
@@ -386,8 +386,8 @@ defmodule <%= @app_module %>.Views do
     end
   end
 
-  defp to_string(val) when is_binary(val), do: val
-  defp to_string(val) when is_integer(val), do: :erlang.integer_to_binary(val)
-  defp to_string(val) when is_float(val), do: :erlang.float_to_binary(val, [{:decimals, 2}])
-  defp to_string(_), do: ""
+  defp stringify(val) when is_binary(val), do: val
+  defp stringify(val) when is_integer(val), do: :erlang.integer_to_binary(val)
+  defp stringify(val) when is_float(val), do: :erlang.float_to_binary(val, [{:decimals, 2}])
+  defp stringify(_), do: ""
 end
