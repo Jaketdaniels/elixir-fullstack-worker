@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "<%= @app_name %>",
+  "main": "_build/worker/src/index.js",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "dev": {
+    "port": <%= @port %>
+  },
+
+  // Binary modules loaded alongside the worker
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": ["**/*.wasm"],
+      "fallthrough": false
+    },
+    {
+      "type": "Data",
+      "globs": ["**/*.avm"],
+      "fallthrough": false
+    }
+  ],
+
+  // KV namespaces (locations with TTL)
+  "kv_namespaces": [
+    { "binding": "LOCATIONS", "id": "locations-kv-id" }
+  ],
+
+  // D1 database (users, profiles, messages, tokens)
+  "d1_databases": [
+    { "binding": "DB", "database_name": "phoenix-db", "database_id": "phoenix-db-id" }
+  ],
+
+  // Environment variables
+  "vars": {
+    "BETTER_AUTH_SECRET": "change-me-in-production",
+    "BETTER_AUTH_URL": "http://localhost:<%= @port %>"
+  }
+}

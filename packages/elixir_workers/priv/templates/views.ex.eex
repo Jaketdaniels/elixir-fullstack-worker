@@ -1,0 +1,393 @@
+defmodule <%= @app_module %>.Views do
+  @moduledoc false
+
+  alias ElixirWorkers.HTML
+
+  # --- Layout ---
+
+  def layout(title, body_html, opts \\ %{}) do
+    nav = case opts["auth"] do
+      nil -> ""
+      _auth -> nav_html()
+    end
+
+    css_link = "<link rel=\"stylesheet\" href=\"/app.css\"/>"
+    js_link = case opts["js"] do
+      true -> "<script src=\"/app.js\" defer></script>"
+      _ -> ""
+    end
+    leaflet = case opts["leaflet"] do
+      true ->
+        "<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\"/>" <>
+        "<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>"
+      _ -> ""
+    end
+
+    :erlang.iolist_to_binary([
+      "<!DOCTYPE html><html lang=\"en\"><head>",
+      "<meta charset=\"utf-8\"/>",
+      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>",
+      "<title>", HTML.escape(title), " | Dark Phoenix</title>",
+      "<link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\"/>",
+      "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\"/>",
+      "<link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap\" rel=\"stylesheet\"/>",
+      css_link, leaflet,
+      "</head><body>",
+      nav, body_html, js_link,
+      "</body></html>"
+    ])
+  end
+
+  defp nav_html do
+    "<nav class=\"dp-nav\"><div class=\"dp-nav-inner\">" <>
+    "<a href=\"/app\" class=\"dp-logo\">Dark Phoenix</a>" <>
+    "<div class=\"dp-nav-links\">" <>
+    "<a href=\"/app\">Map</a>" <>
+    "<a href=\"/messages\">Messages</a>" <>
+    "<a href=\"/profile\">Profile</a>" <>
+    "<a href=\"/tokens\">Tokens</a>" <>
+    "<a href=\"/admin\">Admin</a>" <>
+    "</div></div></nav>"
+  end
+
+  # --- Landing page ---
+
+  def landing do
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-hero\">",
+        "<div class=\"dp-embers\" id=\"embers\"></div>",
+        "<div class=\"dp-hero-content\">",
+          "<h1 class=\"dp-hero-title\">Connect in <span class=\"dp-fire\">realtime</span></h1>",
+          "<p class=\"dp-hero-sub\">Live location sharing. Nearby discovery. Messaging. All running on Elixir at the edge.</p>",
+          "<div class=\"dp-hero-cta\">",
+            "<a href=\"/signup\" class=\"dp-btn dp-btn-fire\">Get started</a>",
+            "<a href=\"/login\" class=\"dp-btn dp-btn-ghost\">Sign in</a>",
+          "</div>",
+        "</div>",
+      "</div>",
+
+      "<section class=\"dp-features\">",
+        "<div class=\"dp-container\">",
+          "<div class=\"dp-grid-3\">",
+            feature_card("Live Map", "See who's nearby in realtime. Share your location, discover connections on an interactive map.", "M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"),
+            feature_card("Messaging", "Direct messages powered by a token economy. Every message costs 1 token — keep conversations meaningful.", "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"),
+            feature_card("Privacy First", "Locations expire after 5 minutes. You control what's shared. No permanent tracking.", "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"),
+          "</div>",
+        "</div>",
+      "</section>",
+
+      "<section class=\"dp-pricing\">",
+        "<div class=\"dp-container\">",
+          "<h2 class=\"dp-section-title\">Simple pricing</h2>",
+          "<div class=\"dp-grid-2\">",
+            pricing_card("Free", "0", ["50 tokens on signup", "20 free daily refill", "Live map access", "Profile & messaging"]),
+            pricing_card("Pro", "9", ["Unlimited tokens", "Priority map placement", "Read receipts", "Custom avatar frames"]),
+          "</div>",
+        "</div>",
+      "</section>",
+
+      "<footer class=\"dp-footer\">",
+        "<div class=\"dp-container\">",
+          "<p class=\"dp-muted\">Dark Phoenix — Elixir on Cloudflare Workers</p>",
+        "</div>",
+      "</footer>",
+
+      "<script>",
+        "!function(){var e=document.getElementById('embers');if(!e)return;for(var i=0;i<20;i++){var d=document.createElement('div');d.className='dp-ember';d.style.left=Math.random()*100+'%';d.style.animationDelay=Math.random()*4+'s';d.style.animationDuration=(3+Math.random()*4)+'s';e.appendChild(d)}}();",
+      "</script>"
+    ])
+
+    layout("Welcome", body)
+  end
+
+  defp feature_card(title, desc, icon_path) do
+    :erlang.iolist_to_binary([
+      "<div class=\"dp-card\">",
+        "<div class=\"dp-card-icon\">",
+          "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"32\" height=\"32\"><path d=\"", icon_path, "\"/></svg>",
+        "</div>",
+        "<h3>", HTML.escape(title), "</h3>",
+        "<p>", HTML.escape(desc), "</p>",
+      "</div>"
+    ])
+  end
+
+  defp pricing_card(tier, price, features) do
+    feature_items = Enum.map(features, fn f ->
+      "<li>" <> HTML.escape(f) <> "</li>"
+    end)
+
+    :erlang.iolist_to_binary([
+      "<div class=\"dp-price-card\">",
+        "<h3>", tier, "</h3>",
+        "<div class=\"dp-price\">$", price, "<span>/mo</span></div>",
+        "<ul>", feature_items, "</ul>",
+        "<a href=\"/signup\" class=\"dp-btn dp-btn-fire\">Start free</a>",
+      "</div>"
+    ])
+  end
+
+  # --- Auth pages ---
+
+  def login do
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-auth-page\">",
+        "<div class=\"dp-auth-card\">",
+          "<h1>Sign in</h1>",
+          "<form id=\"login-form\" class=\"dp-form\">",
+            "<input type=\"email\" name=\"email\" placeholder=\"Email\" required class=\"dp-input\"/>",
+            "<input type=\"password\" name=\"password\" placeholder=\"Password\" required class=\"dp-input\"/>",
+            "<button type=\"submit\" class=\"dp-btn dp-btn-fire dp-btn-full\">Sign in</button>",
+          "</form>",
+          "<p class=\"dp-auth-alt\">No account? <a href=\"/signup\">Sign up</a></p>",
+          "<div id=\"auth-error\" class=\"dp-error\" style=\"display:none\"></div>",
+        "</div>",
+      "</div>"
+    ])
+
+    layout("Sign in", body, %{"js" => true})
+  end
+
+  def signup do
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-auth-page\">",
+        "<div class=\"dp-auth-card\">",
+          "<h1>Create account</h1>",
+          "<form id=\"signup-form\" class=\"dp-form\">",
+            "<input type=\"text\" name=\"name\" placeholder=\"Display name\" required class=\"dp-input\"/>",
+            "<input type=\"email\" name=\"email\" placeholder=\"Email\" required class=\"dp-input\"/>",
+            "<input type=\"password\" name=\"password\" placeholder=\"Password\" required minlength=\"8\" class=\"dp-input\"/>",
+            "<button type=\"submit\" class=\"dp-btn dp-btn-fire dp-btn-full\">Create account</button>",
+          "</form>",
+          "<p class=\"dp-auth-alt\">Have an account? <a href=\"/login\">Sign in</a></p>",
+          "<div id=\"auth-error\" class=\"dp-error\" style=\"display:none\"></div>",
+        "</div>",
+      "</div>"
+    ])
+
+    layout("Sign up", body, %{"js" => true})
+  end
+
+  # --- Map page ---
+
+  def map_page(auth) do
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-map-page\">",
+        "<div id=\"map\" class=\"dp-map\"></div>",
+        "<div class=\"dp-map-sidebar\">",
+          "<h3>Nearby</h3>",
+          "<div id=\"nearby-list\" class=\"dp-nearby-list\">",
+            "<p class=\"dp-muted\">Loading...</p>",
+          "</div>",
+        "</div>",
+      "</div>",
+      "<script>window.__AUTH__=", ElixirWorkers.JSON.encode(auth), ";</script>"
+    ])
+
+    layout("Map", body, %{"auth" => auth, "js" => true, "leaflet" => true})
+  end
+
+  # --- Profile pages ---
+
+  def profile_edit(auth, profile) do
+    dn = HTML.escape(profile["display_name"] || "")
+    bio = HTML.escape(profile["bio"] || "")
+    avatar = HTML.escape(profile["avatar_url"] || "")
+
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-container dp-page\">",
+        "<h1>Your Profile</h1>",
+        "<form id=\"profile-form\" class=\"dp-form\">",
+          "<label class=\"dp-label\">Display name</label>",
+          "<input type=\"text\" name=\"display_name\" value=\"", dn, "\" class=\"dp-input\"/>",
+          "<label class=\"dp-label\">Bio</label>",
+          "<textarea name=\"bio\" rows=\"3\" class=\"dp-input\">", bio, "</textarea>",
+          "<label class=\"dp-label\">Avatar URL</label>",
+          "<input type=\"url\" name=\"avatar_url\" value=\"", avatar, "\" class=\"dp-input\"/>",
+          "<button type=\"submit\" class=\"dp-btn dp-btn-fire\">Save</button>",
+        "</form>",
+        "<div id=\"profile-msg\" class=\"dp-success\" style=\"display:none\">Saved!</div>",
+      "</div>",
+      "<script>window.__AUTH__=", ElixirWorkers.JSON.encode(auth), ";</script>"
+    ])
+
+    layout("Profile", body, %{"auth" => auth, "js" => true})
+  end
+
+  def profile_view(_auth, profile) do
+    dn = HTML.escape(profile["display_name"] || "Unknown")
+    bio = HTML.escape(profile["bio"] || "")
+    uid = HTML.escape(profile["user_id"] || "")
+
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-container dp-page\">",
+        "<div class=\"dp-profile-card\">",
+          "<h1>", dn, "</h1>",
+          "<p class=\"dp-bio\">", bio, "</p>",
+          "<a href=\"/messages/", uid, "\" class=\"dp-btn dp-btn-fire\">Send message</a>",
+        "</div>",
+      "</div>"
+    ])
+
+    layout(dn, body, %{"auth" => %{}})
+  end
+
+  def not_found_page do
+    body = "<div class=\"dp-container dp-page dp-center\"><h1>404</h1><p class=\"dp-muted\">Not found</p></div>"
+    layout("Not found", body)
+  end
+
+  # --- Messages pages ---
+
+  def messages_page(auth, convos) do
+    list = case convos do
+      [] -> "<p class=\"dp-muted\">No messages yet. Find someone on the map!</p>"
+      _ ->
+        items = Enum.map(convos, fn m ->
+          other = HTML.escape(m["display_name"] || m["other_id"] || "?")
+          preview = HTML.escape(truncate(m["content"] || "", 50))
+          oid = HTML.escape(m["other_id"] || "")
+          "<a href=\"/messages/" <> oid <> "\" class=\"dp-msg-item\">" <>
+          "<strong>" <> other <> "</strong>" <>
+          "<span>" <> preview <> "</span></a>"
+        end)
+        :erlang.iolist_to_binary(items)
+    end
+
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-container dp-page\">",
+        "<h1>Messages</h1>",
+        "<div class=\"dp-msg-list\">", list, "</div>",
+      "</div>"
+    ])
+
+    layout("Messages", body, %{"auth" => auth})
+  end
+
+  def conversation_page(auth, other_profile, messages) do
+    other_name = HTML.escape(other_profile["display_name"] || other_profile["user_id"] || "User")
+    other_id = HTML.escape(other_profile["user_id"] || "")
+
+    msg_html = case messages do
+      [] -> "<p class=\"dp-muted\">Start the conversation!</p>"
+      _ ->
+        items = Enum.map(messages, fn m ->
+          is_mine = m["from_id"] == auth["userId"]
+          cls = if is_mine, do: "dp-bubble dp-bubble-mine", else: "dp-bubble dp-bubble-theirs"
+          "<div class=\"" <> cls <> "\">" <>
+          "<p>" <> HTML.escape(m["content"] || "") <> "</p>" <>
+          "<small>" <> HTML.escape(m["created_at"] || "") <> "</small></div>"
+        end)
+        :erlang.iolist_to_binary(items)
+    end
+
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-container dp-page dp-convo\">",
+        "<div class=\"dp-convo-header\">",
+          "<a href=\"/messages\" class=\"dp-back\">&larr;</a>",
+          "<h2>", other_name, "</h2>",
+        "</div>",
+        "<div id=\"messages\" class=\"dp-messages\">", msg_html, "</div>",
+        "<form id=\"msg-form\" class=\"dp-msg-form\">",
+          "<input type=\"hidden\" name=\"to_id\" value=\"", other_id, "\"/>",
+          "<input type=\"text\" name=\"content\" placeholder=\"Type a message...\" class=\"dp-input dp-input-grow\" autocomplete=\"off\"/>",
+          "<button type=\"submit\" class=\"dp-btn dp-btn-fire\">Send</button>",
+        "</form>",
+      "</div>",
+      "<script>window.__AUTH__=", ElixirWorkers.JSON.encode(auth), ";</script>"
+    ])
+
+    layout("Chat with " <> (other_profile["display_name"] || "User"), body, %{"auth" => auth, "js" => true})
+  end
+
+  # --- Tokens page ---
+
+  def tokens_page(auth, tokens) do
+    balance = tokens["balance"] || 0
+    lifetime = tokens["lifetime_earned"] || 0
+    daily = tokens["daily_free_remaining"] || 0
+
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-container dp-page\">",
+        "<h1>Tokens</h1>",
+        "<div class=\"dp-token-stats\">",
+          token_stat("Balance", to_string(balance)),
+          token_stat("Lifetime earned", to_string(lifetime)),
+          token_stat("Daily free left", to_string(daily)),
+        "</div>",
+        "<div class=\"dp-token-actions\">",
+          "<h3>Get more tokens</h3>",
+          "<p class=\"dp-muted\">Each message costs 1 token. Free accounts get 20 tokens daily.</p>",
+          "<button id=\"buy-tokens\" class=\"dp-btn dp-btn-fire\">Buy 100 tokens</button>",
+          "<div id=\"token-msg\" class=\"dp-success\" style=\"display:none\"></div>",
+        "</div>",
+      "</div>",
+      "<script>window.__AUTH__=", ElixirWorkers.JSON.encode(auth), ";</script>"
+    ])
+
+    layout("Tokens", body, %{"auth" => auth, "js" => true})
+  end
+
+  defp token_stat(label, value) do
+    "<div class=\"dp-token-stat\">" <>
+    "<div class=\"dp-token-val\">" <> HTML.escape(value) <> "</div>" <>
+    "<div class=\"dp-token-label\">" <> HTML.escape(label) <> "</div></div>"
+  end
+
+  # --- Admin page ---
+
+  def admin_page(auth, stats) do
+    users = stats["recent_users"] || []
+
+    user_rows = case users do
+      [] -> "<tr><td colspan=\"3\" class=\"dp-muted\">No users yet</td></tr>"
+      _ ->
+        items = Enum.map(users, fn u ->
+          "<tr><td>" <> HTML.escape(u["display_name"] || u["email"] || "?") <> "</td>" <>
+          "<td>" <> HTML.escape(u["email"] || "") <> "</td>" <>
+          "<td>" <> HTML.escape(u["createdAt"] || "") <> "</td></tr>"
+        end)
+        :erlang.iolist_to_binary(items)
+    end
+
+    body = :erlang.iolist_to_binary([
+      "<div class=\"dp-container dp-page\">",
+        "<h1>Admin Dashboard</h1>",
+        "<div class=\"dp-admin-stats\">",
+          admin_stat("Users", to_string(stats["users"] || 0)),
+          admin_stat("Messages", to_string(stats["messages"] || 0)),
+          admin_stat("Tokens issued", to_string(stats["tokens_issued"] || 0)),
+          admin_stat("Tokens spent", to_string(stats["tokens_spent"] || 0)),
+        "</div>",
+        "<h2>Recent signups</h2>",
+        "<table class=\"dp-table\">",
+          "<thead><tr><th>Name</th><th>Email</th><th>Joined</th></tr></thead>",
+          "<tbody>", user_rows, "</tbody>",
+        "</table>",
+      "</div>"
+    ])
+
+    layout("Admin", body, %{"auth" => auth})
+  end
+
+  defp admin_stat(label, value) do
+    "<div class=\"dp-admin-stat\">" <>
+    "<div class=\"dp-admin-val\">" <> HTML.escape(value) <> "</div>" <>
+    "<div class=\"dp-admin-label\">" <> HTML.escape(label) <> "</div></div>"
+  end
+
+  # --- Helpers ---
+
+  defp truncate(str, max) do
+    if byte_size(str) > max do
+      :binary.part(str, 0, max) <> "..."
+    else
+      str
+    end
+  end
+
+  defp to_string(val) when is_binary(val), do: val
+  defp to_string(val) when is_integer(val), do: :erlang.integer_to_binary(val)
+  defp to_string(val) when is_float(val), do: :erlang.float_to_binary(val, [{:decimals, 2}])
+  defp to_string(_), do: ""
+end

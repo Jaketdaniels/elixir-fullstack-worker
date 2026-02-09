@@ -1,0 +1,248 @@
+defmodule <%= @app_module %>.Assets do
+  @moduledoc false
+
+  def css do
+    <<
+      "*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }",
+      "body { min-height:100vh; font-family:Outfit,system-ui,sans-serif; background:#0a0a0f; color:#faf5ff; }",
+      "a { color:#f59e0b; text-decoration:none; } a:hover { color:#ef4444; }",
+
+      # Nav
+      ".dp-nav { position:sticky; top:0; z-index:100; background:rgba(10,10,15,.92); border-bottom:1px solid #1f1f28; backdrop-filter:blur(12px); }",
+      ".dp-nav-inner { max-width:1200px; margin:0 auto; padding:0.75rem 1.5rem; display:flex; align-items:center; justify-content:space-between; }",
+      ".dp-logo { font-weight:800; font-size:1.1rem; background:linear-gradient(135deg,#f59e0b,#ef4444); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }",
+      ".dp-nav-links { display:flex; gap:1.5rem; font-size:0.875rem; font-weight:500; }",
+      ".dp-nav-links a { color:#6b7280; transition:color .2s; } .dp-nav-links a:hover { color:#faf5ff; }",
+
+      # Hero
+      ".dp-hero { position:relative; min-height:100vh; display:flex; align-items:center; justify-content:center; overflow:hidden; background:radial-gradient(ellipse at 50% 80%,#1a0a0a 0%,#0a0a0f 70%); }",
+      ".dp-hero-content { position:relative; z-index:2; text-align:center; padding:2rem; }",
+      ".dp-hero-title { font-size:clamp(2.5rem,6vw,4.5rem); font-weight:800; letter-spacing:-0.03em; line-height:1.1; margin-bottom:1.5rem; }",
+      ".dp-fire { background:linear-gradient(135deg,#f59e0b,#ef4444,#ea580c); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }",
+      ".dp-hero-sub { font-size:1.125rem; color:#6b7280; max-width:500px; margin:0 auto 2.5rem; line-height:1.7; font-weight:300; }",
+      ".dp-hero-cta { display:flex; gap:1rem; justify-content:center; flex-wrap:wrap; }",
+
+      # Ember particles
+      ".dp-embers { position:absolute; inset:0; z-index:1; pointer-events:none; }",
+      ".dp-ember { position:absolute; bottom:-10px; width:3px; height:3px; border-radius:50%; background:#ea580c; opacity:0; animation:ember-rise linear infinite; }",
+      "@keyframes ember-rise { 0%{transform:translateY(0) scale(1);opacity:0;} 10%{opacity:0.8;} 80%{opacity:0.3;} 100%{transform:translateY(-100vh) scale(0.3);opacity:0;} }",
+
+      # Buttons
+      ".dp-btn { display:inline-block; padding:0.75rem 2rem; border-radius:8px; font-weight:600; font-size:0.9rem; font-family:inherit; cursor:pointer; transition:all .2s; border:none; }",
+      ".dp-btn-fire { background:linear-gradient(135deg,#f59e0b,#ef4444); color:#0a0a0f; } .dp-btn-fire:hover { filter:brightness(1.15); transform:translateY(-1px); }",
+      ".dp-btn-ghost { border:1px solid #333; color:#faf5ff; background:transparent; } .dp-btn-ghost:hover { border-color:#f59e0b; color:#f59e0b; }",
+      ".dp-btn-full { width:100%; text-align:center; }",
+
+      # Cards & sections
+      ".dp-container { max-width:1200px; margin:0 auto; padding:0 1.5rem; }",
+      ".dp-page { padding-top:2rem; padding-bottom:4rem; }",
+      ".dp-center { text-align:center; }",
+      ".dp-grid-3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1.5rem; }",
+      ".dp-grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:1.5rem; max-width:720px; margin:0 auto; }",
+      ".dp-card { background:#141418; border:1px solid #1f1f28; border-radius:12px; padding:2rem; transition:border-color .3s,box-shadow .3s; }",
+      ".dp-card:hover { border-color:#92400e; box-shadow:0 0 30px rgba(234,88,12,.08); }",
+      ".dp-card-icon { color:#f59e0b; margin-bottom:1rem; }",
+      ".dp-card h3 { font-size:1.1rem; font-weight:700; margin-bottom:0.5rem; }",
+      ".dp-card p { color:#6b7280; font-size:0.9rem; line-height:1.6; }",
+
+      # Features & pricing sections
+      ".dp-features { padding:6rem 0; }",
+      ".dp-pricing { padding:6rem 0; background:#0d0d12; }",
+      ".dp-section-title { text-align:center; font-size:2rem; font-weight:800; margin-bottom:3rem; letter-spacing:-0.02em; }",
+      ".dp-price-card { background:#141418; border:1px solid #1f1f28; border-radius:12px; padding:2.5rem; text-align:center; }",
+      ".dp-price-card h3 { font-size:1.25rem; font-weight:700; margin-bottom:0.5rem; }",
+      ".dp-price { font-size:3rem; font-weight:800; margin-bottom:1.5rem; } .dp-price span { font-size:1rem; color:#6b7280; font-weight:400; }",
+      ".dp-price-card ul { list-style:none; margin-bottom:2rem; } .dp-price-card li { padding:0.5rem 0; color:#9ca3af; font-size:0.9rem; border-bottom:1px solid #1f1f28; }",
+
+      # Footer
+      ".dp-footer { padding:3rem 0; border-top:1px solid #1f1f28; text-align:center; }",
+      ".dp-muted { color:#6b7280; font-size:0.875rem; }",
+
+      # Auth pages
+      ".dp-auth-page { min-height:100vh; display:flex; align-items:center; justify-content:center; }",
+      ".dp-auth-card { background:#141418; border:1px solid #1f1f28; border-radius:16px; padding:3rem; width:100%; max-width:400px; }",
+      ".dp-auth-card h1 { font-size:1.75rem; font-weight:800; margin-bottom:2rem; text-align:center; }",
+      ".dp-auth-alt { text-align:center; margin-top:1.5rem; color:#6b7280; font-size:0.875rem; }",
+
+      # Forms
+      ".dp-form { display:flex; flex-direction:column; gap:1rem; }",
+      ".dp-label { font-size:0.8rem; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; }",
+      ".dp-input { background:#0a0a0f; border:1px solid #1f1f28; border-radius:8px; padding:0.75rem 1rem; color:#faf5ff; font-family:inherit; font-size:0.9rem; outline:none; transition:border-color .2s; }",
+      ".dp-input:focus { border-color:#f59e0b; }",
+      ".dp-input-grow { flex:1; }",
+      ".dp-error { color:#ef4444; font-size:0.85rem; margin-top:0.5rem; padding:0.75rem; background:rgba(239,68,68,.1); border-radius:8px; }",
+      ".dp-success { color:#22c55e; font-size:0.85rem; margin-top:0.5rem; padding:0.75rem; background:rgba(34,197,94,.1); border-radius:8px; }",
+
+      # Map page
+      ".dp-map-page { display:flex; height:calc(100vh - 53px); }",
+      ".dp-map { flex:1; }",
+      ".dp-map-sidebar { width:300px; background:#141418; border-left:1px solid #1f1f28; padding:1.5rem; overflow-y:auto; }",
+      ".dp-map-sidebar h3 { font-size:1rem; font-weight:700; margin-bottom:1rem; }",
+      ".dp-nearby-list { display:flex; flex-direction:column; gap:0.5rem; }",
+      ".dp-nearby-item { display:flex; align-items:center; gap:0.75rem; padding:0.75rem; background:#0a0a0f; border-radius:8px; cursor:pointer; transition:background .2s; }",
+      ".dp-nearby-item:hover { background:#1a1a22; }",
+      ".dp-nearby-dot { width:8px; height:8px; border-radius:50%; background:#22c55e; flex-shrink:0; }",
+      ".dp-nearby-name { font-size:0.875rem; font-weight:500; }",
+
+      # Messages
+      ".dp-msg-list { display:flex; flex-direction:column; gap:0; }",
+      ".dp-msg-item { display:flex; flex-direction:column; padding:1rem; border-bottom:1px solid #1f1f28; transition:background .2s; }",
+      ".dp-msg-item:hover { background:#141418; }",
+      ".dp-msg-item strong { font-size:0.9rem; margin-bottom:0.25rem; }",
+      ".dp-msg-item span { font-size:0.8rem; color:#6b7280; }",
+
+      # Conversation
+      ".dp-convo { display:flex; flex-direction:column; height:calc(100vh - 53px); }",
+      ".dp-convo-header { display:flex; align-items:center; gap:1rem; padding:1rem 0; border-bottom:1px solid #1f1f28; flex-shrink:0; }",
+      ".dp-back { font-size:1.25rem; color:#6b7280; } .dp-back:hover { color:#faf5ff; }",
+      ".dp-messages { flex:1; overflow-y:auto; padding:1rem 0; display:flex; flex-direction:column; gap:0.75rem; }",
+      ".dp-bubble { max-width:70%; padding:0.75rem 1rem; border-radius:12px; font-size:0.9rem; line-height:1.5; }",
+      ".dp-bubble small { display:block; font-size:0.7rem; color:#6b7280; margin-top:0.25rem; }",
+      ".dp-bubble-mine { align-self:flex-end; background:linear-gradient(135deg,#92400e,#7c2d12); border-bottom-right-radius:4px; }",
+      ".dp-bubble-theirs { align-self:flex-start; background:#1f1f28; border-bottom-left-radius:4px; }",
+      ".dp-msg-form { display:flex; gap:0.75rem; padding:1rem 0; border-top:1px solid #1f1f28; flex-shrink:0; }",
+
+      # Tokens
+      ".dp-token-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:3rem; }",
+      ".dp-token-stat { background:#141418; border:1px solid #1f1f28; border-radius:12px; padding:1.5rem; text-align:center; }",
+      ".dp-token-val { font-size:2.5rem; font-weight:800; background:linear-gradient(135deg,#f59e0b,#ef4444); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }",
+      ".dp-token-label { font-size:0.8rem; color:#6b7280; margin-top:0.25rem; text-transform:uppercase; letter-spacing:0.05em; }",
+      ".dp-token-actions { background:#141418; border:1px solid #1f1f28; border-radius:12px; padding:2rem; }",
+      ".dp-token-actions h3 { margin-bottom:0.5rem; }",
+
+      # Admin
+      ".dp-admin-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; margin-bottom:3rem; }",
+      ".dp-admin-stat { background:#141418; border:1px solid #1f1f28; border-radius:12px; padding:1.5rem; text-align:center; }",
+      ".dp-admin-val { font-size:2rem; font-weight:800; color:#f59e0b; }",
+      ".dp-admin-label { font-size:0.8rem; color:#6b7280; margin-top:0.25rem; text-transform:uppercase; letter-spacing:0.05em; }",
+      ".dp-table { width:100%; border-collapse:collapse; }",
+      ".dp-table th { text-align:left; padding:0.75rem; font-size:0.8rem; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em; border-bottom:2px solid #1f1f28; }",
+      ".dp-table td { padding:0.75rem; font-size:0.875rem; border-bottom:1px solid #1f1f28; }",
+
+      # Profile
+      ".dp-profile-card { background:#141418; border:1px solid #1f1f28; border-radius:16px; padding:3rem; text-align:center; max-width:480px; margin:0 auto; }",
+      ".dp-bio { color:#6b7280; margin:1rem 0 2rem; line-height:1.6; }",
+
+      # Leaflet custom
+      ".leaflet-container { background:#0a0a0f !important; }",
+      ".dp-marker-popup { font-family:Outfit,sans-serif; }",
+      ".dp-marker-popup strong { color:#f59e0b; }",
+
+      # Responsive
+      "@media(max-width:768px){",
+        ".dp-map-page{flex-direction:column;}",
+        ".dp-map-sidebar{width:100%;height:200px;border-left:none;border-top:1px solid #1f1f28;}",
+        ".dp-token-stats{grid-template-columns:1fr;}",
+        ".dp-nav-links{gap:0.75rem;font-size:0.8rem;}",
+      "}"
+    >>
+  end
+
+  def js do
+    <<
+      "!function(){",
+        "'use strict';",
+
+        # Auth handlers
+        "var lf=document.getElementById('login-form');",
+        "if(lf)lf.onsubmit=async function(e){",
+          "e.preventDefault();",
+          "var d=new FormData(lf);",
+          "try{",
+            "var r=await fetch('/api/auth/sign-in/email',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:d.get('email'),password:d.get('password')})});",
+            "if(r.ok){location.href='/app'}else{var j=await r.json();showErr(j.message||'Login failed')}",
+          "}catch(x){showErr('Network error')}",
+        "};",
+
+        "var sf=document.getElementById('signup-form');",
+        "if(sf)sf.onsubmit=async function(e){",
+          "e.preventDefault();",
+          "var d=new FormData(sf);",
+          "try{",
+            "var r=await fetch('/api/auth/sign-up/email',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:d.get('name'),email:d.get('email'),password:d.get('password')})});",
+            "if(r.ok){location.href='/app'}else{var j=await r.json();showErr(j.message||'Signup failed')}",
+          "}catch(x){showErr('Network error')}",
+        "};",
+
+        "function showErr(m){var el=document.getElementById('auth-error');if(el){el.textContent=m;el.style.display='block'}}",
+
+        # Profile form
+        "var pf=document.getElementById('profile-form');",
+        "if(pf)pf.onsubmit=async function(e){",
+          "e.preventDefault();",
+          "var d=new FormData(pf);",
+          "var r=await fetch('/api/profile',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({display_name:d.get('display_name'),bio:d.get('bio'),avatar_url:d.get('avatar_url')})});",
+          "if(r.ok){var el=document.getElementById('profile-msg');if(el){el.style.display='block';setTimeout(function(){el.style.display='none'},2000)}}",
+        "};",
+
+        # Message form
+        "var mf=document.getElementById('msg-form');",
+        "if(mf)mf.onsubmit=async function(e){",
+          "e.preventDefault();",
+          "var d=new FormData(mf);",
+          "var r=await fetch('/api/messages',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to_id:d.get('to_id'),content:d.get('content')})});",
+          "if(r.ok){location.reload()}else{var j=await r.json();alert(j.error||'Send failed')}",
+        "};",
+
+        # Buy tokens
+        "var bt=document.getElementById('buy-tokens');",
+        "if(bt)bt.onclick=async function(){",
+          "var r=await fetch('/api/tokens/purchase',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({amount:100})});",
+          "if(r.ok){var el=document.getElementById('token-msg');if(el){el.textContent='Added 100 tokens!';el.style.display='block'}setTimeout(function(){location.reload()},1500)}",
+        "};",
+
+        # Map initialization
+        "if(document.getElementById('map')&&typeof L!=='undefined'){",
+          "var map=L.map('map',{zoomControl:true}).setView([37.7749,-122.4194],13);",
+          "L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{",
+            "attribution:'&copy; OpenStreetMap &copy; CARTO',maxZoom:19",
+          "}).addTo(map);",
+
+          "var markers={};",
+
+          # Geolocation
+          "if(navigator.geolocation){",
+            "navigator.geolocation.watchPosition(function(pos){",
+              "var lat=pos.coords.latitude,lng=pos.coords.longitude;",
+              "map.setView([lat,lng],15);",
+              "fetch('/api/location',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({lat:lat,lng:lng,ts:new Date().toISOString()})});",
+            "},function(){},",
+            "{enableHighAccuracy:true,maximumAge:30000,timeout:10000});",
+          "}",
+
+          # Poll nearby users
+          "async function pollNearby(){",
+            "try{",
+              "var r=await fetch('/api/nearby');",
+              "if(!r.ok)return;",
+              "var d=await r.json();",
+              "var users=d.users||[];",
+              "var list=document.getElementById('nearby-list');",
+              "if(list){",
+                "list.innerHTML='';",
+                "if(users.length===0){list.innerHTML='<p class=\"dp-muted\">No one nearby</p>'}",
+                "users.forEach(function(u){",
+                  "var el=document.createElement('div');el.className='dp-nearby-item';",
+                  "el.innerHTML='<span class=\"dp-nearby-dot\"></span><span class=\"dp-nearby-name\">'+esc(u.display_name||'Anonymous')+'</span>';",
+                  "el.onclick=function(){map.setView([u.lat,u.lng],16)};",
+                  "list.appendChild(el);",
+
+                  # Update markers
+                  "var id=u.user_id;",
+                  "if(markers[id]){markers[id].setLatLng([u.lat,u.lng])}",
+                  "else{",
+                    "var icon=L.divIcon({className:'',html:'<div style=\"width:12px;height:12px;background:linear-gradient(135deg,#f59e0b,#ef4444);border-radius:50%;border:2px solid #0a0a0f;\"></div>',iconSize:[12,12]});",
+                    "markers[id]=L.marker([u.lat,u.lng],{icon:icon}).addTo(map).bindPopup('<div class=\"dp-marker-popup\"><strong>'+esc(u.display_name||'Anonymous')+'</strong><br/><a href=\"/profile/'+id+'\">View profile</a> | <a href=\"/messages/'+id+'\">Message</a></div>');",
+                  "}",
+                "});",
+              "}",
+            "}catch(e){}",
+          "}",
+          "pollNearby();setInterval(pollNearby,10000);",
+        "}",
+
+        "function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}",
+      "}();"
+    >>
+  end
+end
