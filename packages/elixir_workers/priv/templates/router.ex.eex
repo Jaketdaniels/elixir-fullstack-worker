@@ -391,25 +391,25 @@ defmodule <%= @app_module %>.Router do
           nil -> Conn.json(conn, 200, %{"users" => []})
           r ->
             keys = r["keys"] || []
-            {conn, locations} = fetch_locations(conn, keys, [], blocked_ids)
+            {conn, locations} = fetch_locations(conn, keys, [], blocked_ids, uid)
             Conn.json(conn, 200, %{"users" => locations})
         end
     end
   end
 
-  defp fetch_locations(conn, [], acc, _blocked), do: {conn, :lists.reverse(acc)}
-  defp fetch_locations(conn, [key | rest], acc, blocked) do
+  defp fetch_locations(conn, [], acc, _blocked, _self_id), do: {conn, :lists.reverse(acc)}
+  defp fetch_locations(conn, [key | rest], acc, blocked, self_id) do
     name = key["name"]
     {conn, value} = KV.get(conn, "LOCATIONS", name)
     case value do
-      nil -> fetch_locations(conn, rest, acc, blocked)
+      nil -> fetch_locations(conn, rest, acc, blocked, self_id)
       v ->
         parsed = ElixirWorkers.JSON.decode(v)
         user_id = parsed["user_id"] || ""
-        if list_member?(blocked, user_id) do
-          fetch_locations(conn, rest, acc, blocked)
+        if user_id == self_id or list_member?(blocked, user_id) do
+          fetch_locations(conn, rest, acc, blocked, self_id)
         else
-          fetch_locations(conn, rest, [parsed | acc], blocked)
+          fetch_locations(conn, rest, [parsed | acc], blocked, self_id)
         end
     end
   end

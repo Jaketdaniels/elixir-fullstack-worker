@@ -79,11 +79,15 @@ defmodule ElixirWorkers.JSON do
     c = :erlang.band(:binary.at(bin, pos), 0xFF)
 
     case c do
-      0x22 -> {:erlang.list_to_binary(:lists.reverse(acc)), pos + 1}
+      0x22 ->
+        {:erlang.list_to_binary(:lists.reverse(acc)), pos + 1}
+
       0x5C ->
         {char, pos} = dec_esc(bin, pos + 1)
         dec_str(bin, pos, [char | acc])
-      _ -> dec_str(bin, pos + 1, [c | acc])
+
+      _ ->
+        dec_str(bin, pos + 1, [c | acc])
     end
   end
 
@@ -266,20 +270,35 @@ defmodule ElixirWorkers.JSON do
       uc = :erlang.band(c, 0xFF)
 
       case uc do
-        0x22 -> enc_str(bin, pos + 1, [?", ?\\ | acc])
-        0x5C -> enc_str(bin, pos + 1, [?\\, ?\\ | acc])
-        0x0A -> enc_str(bin, pos + 1, [?n, ?\\ | acc])
-        0x0D -> enc_str(bin, pos + 1, [?r, ?\\ | acc])
-        0x09 -> enc_str(bin, pos + 1, [?t, ?\\ | acc])
+        0x22 ->
+          enc_str(bin, pos + 1, [?", ?\\ | acc])
+
+        0x5C ->
+          enc_str(bin, pos + 1, [?\\, ?\\ | acc])
+
+        0x0A ->
+          enc_str(bin, pos + 1, [?n, ?\\ | acc])
+
+        0x0D ->
+          enc_str(bin, pos + 1, [?r, ?\\ | acc])
+
+        0x09 ->
+          enc_str(bin, pos + 1, [?t, ?\\ | acc])
+
         uc when uc < 0x20 ->
           hex = :erlang.integer_to_list(uc, 16)
-          padded = case length(hex) do
-            1 -> [?\\, ?u, ?0, ?0, ?0 | hex]
-            2 -> [?\\, ?u, ?0, ?0 | hex]
-            _ -> [?\\, ?u, ?0 | hex]
-          end
+
+          padded =
+            case length(hex) do
+              1 -> [?\\, ?u, ?0, ?0, ?0 | hex]
+              2 -> [?\\, ?u, ?0, ?0 | hex]
+              _ -> [?\\, ?u, ?0 | hex]
+            end
+
           enc_str(bin, pos + 1, :lists.reverse(padded) ++ acc)
-        _ -> enc_str(bin, pos + 1, [uc | acc])
+
+        _ ->
+          enc_str(bin, pos + 1, [uc | acc])
       end
     end
   end

@@ -58,7 +58,7 @@ defmodule ElixirWorkers.Router do
         ]
       end
 
-      defoverridable [middleware: 0]
+      defoverridable middleware: 0
     end
   end
 end

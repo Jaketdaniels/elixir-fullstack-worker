@@ -55,9 +55,7 @@ defmodule Mix.Tasks.ElixirWorkers.New do
     end
 
     IO.puts("")
-    IO.puts(
-      "  #{IO.ANSI.magenta()}#{IO.ANSI.bright()}Creating#{IO.ANSI.reset()}  #{name}"
-    )
+    IO.puts("  #{IO.ANSI.magenta()}#{IO.ANSI.bright()}Creating#{IO.ANSI.reset()}  #{name}")
     IO.puts("")
 
     # Create directories
@@ -69,19 +67,56 @@ defmodule Mix.Tasks.ElixirWorkers.New do
     assigns = [app_name: name, app_module: app_module]
 
     render_template(templates_dir, "mix.exs.eex", Path.join(project_dir, "mix.exs"), assigns)
-    render_template(templates_dir, "app.ex.eex", Path.join(project_dir, "lib/#{name}.ex"), assigns)
-    render_template(templates_dir, "router.ex.eex", Path.join(project_dir, "lib/#{name}/router.ex"), assigns)
-    render_template(templates_dir, "views.ex.eex", Path.join(project_dir, "lib/#{name}/views.ex"), assigns)
-    render_template(templates_dir, "assets.ex.eex", Path.join(project_dir, "lib/#{name}/assets.ex"), assigns)
+
+    render_template(
+      templates_dir,
+      "app.ex.eex",
+      Path.join(project_dir, "lib/#{name}.ex"),
+      assigns
+    )
+
+    render_template(
+      templates_dir,
+      "router.ex.eex",
+      Path.join(project_dir, "lib/#{name}/router.ex"),
+      assigns
+    )
+
+    render_template(
+      templates_dir,
+      "views.ex.eex",
+      Path.join(project_dir, "lib/#{name}/views.ex"),
+      assigns
+    )
+
+    render_template(
+      templates_dir,
+      "assets.ex.eex",
+      Path.join(project_dir, "lib/#{name}/assets.ex"),
+      assigns
+    )
 
     # Render Workers config at project root
     worker_assigns = [app_name: app_name, port: 8797]
-    render_template(templates_dir, "wrangler.jsonc.eex", Path.join(project_dir, "wrangler.jsonc"), worker_assigns)
-    render_template(templates_dir, "package.json.eex", Path.join(project_dir, "package.json"), worker_assigns)
+
+    render_template(
+      templates_dir,
+      "wrangler.jsonc.eex",
+      Path.join(project_dir, "wrangler.jsonc"),
+      worker_assigns
+    )
+
+    render_template(
+      templates_dir,
+      "package.json.eex",
+      Path.join(project_dir, "package.json"),
+      worker_assigns
+    )
 
     # Copy schema.sql (not a template, just a static file)
     schema_src = Path.join(templates_dir, "schema.sql")
     schema_dst = Path.join(project_dir, "schema.sql")
+
     if File.exists?(schema_src) do
       File.cp!(schema_src, schema_dst)
       created("schema.sql")

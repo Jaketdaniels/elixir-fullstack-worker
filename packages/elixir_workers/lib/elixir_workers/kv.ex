@@ -46,14 +46,19 @@ defmodule ElixirWorkers.KV do
       nil ->
         need = %{"type" => "kv_list", "ns" => namespace, "id" => need_id}
         need = if prefix != "", do: Map.put(need, "prefix", prefix), else: need
-        need = case Map.get(opts, "limit") do
-          nil -> need
-          limit -> Map.put(need, "limit", limit)
-        end
-        need = case Map.get(opts, "cursor") do
-          nil -> need
-          cursor -> Map.put(need, "cursor", cursor)
-        end
+
+        need =
+          case Map.get(opts, "limit") do
+            nil -> need
+            limit -> Map.put(need, "limit", limit)
+          end
+
+        need =
+          case Map.get(opts, "cursor") do
+            nil -> need
+            cursor -> Map.put(need, "cursor", cursor)
+          end
+
         {Conn.add_need(conn, need), nil}
 
       result ->
@@ -68,15 +73,17 @@ defmodule ElixirWorkers.KV do
   def put(conn, namespace, key, value, opts \\ %{}) do
     effect = %{"type" => "kv_put", "ns" => namespace, "key" => key, "value" => value}
 
-    effect = case Map.get(opts, "expiration_ttl") do
-      nil -> effect
-      ttl -> Map.put(effect, "expiration_ttl", ttl)
-    end
+    effect =
+      case Map.get(opts, "expiration_ttl") do
+        nil -> effect
+        ttl -> Map.put(effect, "expiration_ttl", ttl)
+      end
 
-    effect = case Map.get(opts, "metadata") do
-      nil -> effect
-      meta -> Map.put(effect, "metadata", meta)
-    end
+    effect =
+      case Map.get(opts, "metadata") do
+        nil -> effect
+        meta -> Map.put(effect, "metadata", meta)
+      end
 
     Conn.add_effect(conn, effect)
   end

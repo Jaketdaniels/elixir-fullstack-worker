@@ -20,9 +20,13 @@ defmodule Mix.Tasks.ElixirWorkers.Deploy do
     project_root = File.cwd!()
 
     IO.puts("")
-    IO.puts("  #{IO.ANSI.magenta()}#{IO.ANSI.bright()}Deploying#{IO.ANSI.reset()} to Cloudflare Workers...")
 
-    {_output, status} = System.cmd("npx", ["wrangler", "deploy"], cd: project_root, into: IO.stream())
+    IO.puts(
+      "  #{IO.ANSI.magenta()}#{IO.ANSI.bright()}Deploying#{IO.ANSI.reset()} to Cloudflare Workers..."
+    )
+
+    {_output, status} =
+      System.cmd("npx", ["wrangler", "deploy"], cd: project_root, into: IO.stream())
 
     if status != 0 do
       Mix.raise("wrangler deploy failed with status #{status}")

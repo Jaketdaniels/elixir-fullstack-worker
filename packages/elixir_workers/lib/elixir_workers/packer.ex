@@ -23,8 +23,7 @@ defmodule ElixirWorkers.Packer do
   @avm_header "#!/usr/bin/env AtomVM\n\0\0"
 
   # IFF chunks that AtomVM needs (LitT handled specially)
-  @kept_chunks ["AtU8", "Code", "ExpT", "LocT", "ImpT",
-                "LitU", "FunT", "StrT", "avmN", "Type"]
+  @kept_chunks ["AtU8", "Code", "ExpT", "LocT", "ImpT", "LitU", "FunT", "StrT", "avmN", "Type"]
 
   @doc """
   Create an .avm archive from .beam files.

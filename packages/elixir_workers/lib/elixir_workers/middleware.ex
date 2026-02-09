@@ -27,10 +27,11 @@ defmodule ElixirWorkers.Middleware do
     headers = Map.get(opts, "headers", "content-type,authorization")
     max_age = Map.get(opts, "max_age", "86400")
 
-    conn = conn
-    |> Conn.put_resp_header("access-control-allow-origin", origin)
-    |> Conn.put_resp_header("access-control-allow-methods", methods)
-    |> Conn.put_resp_header("access-control-allow-headers", headers)
+    conn =
+      conn
+      |> Conn.put_resp_header("access-control-allow-origin", origin)
+      |> Conn.put_resp_header("access-control-allow-methods", methods)
+      |> Conn.put_resp_header("access-control-allow-headers", headers)
 
     # Handle OPTIONS preflight: respond immediately and halt
     if conn["method"] == "OPTIONS" do

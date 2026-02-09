@@ -45,13 +45,20 @@ defmodule <%= @app_module %>.Views do
     "<a href=\"/app\" class=\"dp-logo\" data-nav>Dark Phoenix</a>" <>
     "<div class=\"dp-nav-links\">" <>
     "<a href=\"/app\" data-nav data-route=\"map\">Map</a>" <>
-    "<a href=\"/messages\" data-nav data-route=\"messages\"><span id=\"nav-msg-badge\"></span>Messages</a>" <>
+    "<a href=\"/messages\" data-nav data-route=\"messages\"><span class=\"dp-msg-badge\" data-msg-badge></span>Messages</a>" <>
     "<a href=\"/profile\" data-nav data-route=\"profile\">Profile</a>" <>
     "<a href=\"/tokens\" data-nav data-route=\"tokens\">Tokens</a>" <>
     "<a href=\"/settings\" data-nav data-route=\"settings\" class=\"dp-nav-icon\">" <>
     "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" width=\"18\" height=\"18\"><path d=\"M12 15a3 3 0 100-6 3 3 0 000 6z\"/><path d=\"M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z\"/></svg>" <>
     "</a>" <>
-    "</div></div></nav>"
+    "</div></div>" <>
+    "<div class=\"dp-bottom-nav\" aria-label=\"Primary\">" <>
+    "<a href=\"/app\" data-nav data-route=\"map\" class=\"dp-bottom-item\">Map</a>" <>
+    "<a href=\"/messages\" data-nav data-route=\"messages\" class=\"dp-bottom-item\">Messages<span class=\"dp-msg-badge\" data-msg-badge></span></a>" <>
+    "<a href=\"/profile\" data-nav data-route=\"profile\" class=\"dp-bottom-item\">Profile</a>" <>
+    "<a href=\"/tokens\" data-nav data-route=\"tokens\" class=\"dp-bottom-item\">Tokens</a>" <>
+    "<a href=\"/settings\" data-nav data-route=\"settings\" class=\"dp-bottom-item\">Settings</a>" <>
+    "</div></nav>"
   end
 
   # --- Fragment: Landing ---
@@ -106,15 +113,18 @@ defmodule <%= @app_module %>.Views do
     :erlang.iolist_to_binary([
       "<div class=\"dp-auth-page\">",
         "<div class=\"dp-auth-card\">",
+          "<p class=\"dp-auth-brand dp-fire\">Dark Phoenix</p>",
           "<h1>Sign in</h1>",
           "<form id=\"login-form\" class=\"dp-form\">",
-            "<input type=\"email\" name=\"email\" placeholder=\"Email\" required class=\"dp-input\" autocomplete=\"email\"/>",
-            "<input type=\"password\" name=\"password\" placeholder=\"Password\" required class=\"dp-input\" autocomplete=\"current-password\"/>",
+            "<label class=\"dp-label\" for=\"login-email\">Email</label>",
+            "<input id=\"login-email\" type=\"email\" name=\"email\" placeholder=\"Email\" required class=\"dp-input\" autocomplete=\"email\"/>",
+            "<label class=\"dp-label\" for=\"login-password\">Password</label>",
+            "<input id=\"login-password\" type=\"password\" name=\"password\" placeholder=\"Password\" required class=\"dp-input\" autocomplete=\"current-password\"/>",
             "<div style=\"position:absolute;left:-9999px\" aria-hidden=\"true\"><input type=\"text\" name=\"_hp\" tabindex=\"-1\" autocomplete=\"off\"/></div>",
             "<button type=\"submit\" class=\"dp-btn dp-btn-fire dp-btn-full\">Sign in</button>",
+            "<div id=\"auth-error\" class=\"dp-error\" style=\"display:none\"></div>",
           "</form>",
           "<p class=\"dp-auth-alt\">No account? <a href=\"/signup\" data-nav>Sign up</a></p>",
-          "<div id=\"auth-error\" class=\"dp-error\" style=\"display:none\"></div>",
         "</div>",
       "</div>"
     ])
@@ -126,16 +136,21 @@ defmodule <%= @app_module %>.Views do
     :erlang.iolist_to_binary([
       "<div class=\"dp-auth-page\">",
         "<div class=\"dp-auth-card\">",
+          "<p class=\"dp-auth-brand dp-fire\">Dark Phoenix</p>",
           "<h1>Create account</h1>",
           "<form id=\"signup-form\" class=\"dp-form\">",
-            "<input type=\"text\" name=\"name\" placeholder=\"Display name\" required class=\"dp-input\" autocomplete=\"name\"/>",
-            "<input type=\"email\" name=\"email\" placeholder=\"Email\" required class=\"dp-input\" autocomplete=\"email\"/>",
-            "<input type=\"password\" name=\"password\" placeholder=\"Password\" required minlength=\"8\" class=\"dp-input\" autocomplete=\"new-password\"/>",
+            "<label class=\"dp-label\" for=\"signup-name\">Display name</label>",
+            "<input id=\"signup-name\" type=\"text\" name=\"name\" placeholder=\"Display name\" required class=\"dp-input\" autocomplete=\"name\"/>",
+            "<label class=\"dp-label\" for=\"signup-email\">Email</label>",
+            "<input id=\"signup-email\" type=\"email\" name=\"email\" placeholder=\"Email\" required class=\"dp-input\" autocomplete=\"email\"/>",
+            "<label class=\"dp-label\" for=\"signup-password\">Password</label>",
+            "<input id=\"signup-password\" type=\"password\" name=\"password\" placeholder=\"Password\" required minlength=\"8\" class=\"dp-input\" autocomplete=\"new-password\"/>",
+            "<p class=\"dp-muted\">Minimum 8 characters</p>",
             "<div style=\"position:absolute;left:-9999px\" aria-hidden=\"true\"><input type=\"text\" name=\"_hp\" tabindex=\"-1\" autocomplete=\"off\"/></div>",
             "<button type=\"submit\" class=\"dp-btn dp-btn-fire dp-btn-full\">Create account</button>",
+            "<div id=\"auth-error\" class=\"dp-error\" style=\"display:none\"></div>",
           "</form>",
           "<p class=\"dp-auth-alt\">Have an account? <a href=\"/login\" data-nav>Sign in</a></p>",
-          "<div id=\"auth-error\" class=\"dp-error\" style=\"display:none\"></div>",
         "</div>",
       "</div>"
     ])
@@ -153,6 +168,10 @@ defmodule <%= @app_module %>.Views do
           "</button>",
           "<div id=\"geo-status\" class=\"dp-geo-status\"></div>",
         "</div>",
+        "<section id=\"nearby-sheet\" class=\"dp-nearby-sheet\" aria-live=\"polite\">",
+          "<div class=\"dp-nearby-head\"><h2>Nearby now</h2><span id=\"nearby-count\" class=\"dp-muted\">0</span></div>",
+          "<div id=\"nearby-list\" class=\"dp-nearby-list\"><p class=\"dp-muted\">Share your location to discover people nearby.</p></div>",
+        "</section>",
       "</div>"
     ])
   end
@@ -165,12 +184,61 @@ defmodule <%= @app_module %>.Views do
     avatar = HTML.escape(profile["avatar_url"] || "")
     age = HTML.escape(stringify(profile["age"] || ""))
     looking = HTML.escape(profile["looking_for"] || "")
-    bt = HTML.escape(profile["body_type"] || "")
-    pos = HTML.escape(profile["position"] || "")
+    bt = normalize_choice(profile["body_type"] || "")
+    pos = normalize_choice(profile["position"] || "")
+
+    completion_fields = [
+      profile["display_name"],
+      profile["bio"],
+      profile["avatar_url"],
+      profile["age"],
+      profile["position"],
+      profile["body_type"],
+      profile["looking_for"]
+    ]
+
+    completion_count = profile_completion_count(completion_fields, 0)
+    completion_pct = :erlang.integer_to_binary(div(completion_count * 100, 7))
+
+    position_choices =
+      ensure_choice(
+        [
+          {"", "Select position"},
+          {"top", "Top"},
+          {"bottom", "Bottom"},
+          {"vers", "Vers"},
+          {"side", "Side"},
+          {"not_saying", "Not saying"}
+        ],
+        pos
+      )
+
+    body_type_choices =
+      ensure_choice(
+        [
+          {"", "Select body type"},
+          {"slim", "Slim"},
+          {"athletic", "Athletic"},
+          {"average", "Average"},
+          {"muscular", "Muscular"},
+          {"stocky", "Stocky"},
+          {"bear", "Bear"},
+          {"not_saying", "Not saying"}
+        ],
+        bt
+      )
 
     :erlang.iolist_to_binary([
       "<div class=\"dp-container dp-page\">",
         "<h1>Your Profile</h1>",
+        "<div class=\"dp-profile-completion\">",
+          "<div class=\"dp-profile-completion-row\"><span>Profile completion</span><strong id=\"profile-progress-label\">",
+            completion_pct,
+            "%</strong></div>",
+          "<div class=\"dp-progress\"><span id=\"profile-progress\" class=\"dp-progress-bar\" style=\"width:",
+            completion_pct,
+            "%\"></span></div>",
+        "</div>",
         "<form id=\"profile-form\" class=\"dp-form\">",
           "<label class=\"dp-label\">Display name</label>",
           "<input type=\"text\" name=\"display_name\" value=\"", dn, "\" class=\"dp-input\" maxlength=\"100\"/>",
@@ -180,12 +248,12 @@ defmodule <%= @app_module %>.Views do
           "<input type=\"url\" name=\"avatar_url\" value=\"", avatar, "\" class=\"dp-input\"/>",
           "<div class=\"dp-grid-2-sm\">",
             "<div><label class=\"dp-label\">Age</label><input type=\"number\" name=\"age\" value=\"", age, "\" class=\"dp-input\" min=\"18\" max=\"120\"/></div>",
-            "<div><label class=\"dp-label\">Position</label><input type=\"text\" name=\"position\" value=\"", pos, "\" class=\"dp-input\" maxlength=\"50\" placeholder=\"e.g. top, bottom, vers\"/></div>",
+            "<div><label class=\"dp-label\">Position</label><select name=\"position\" class=\"dp-input\">", select_options(position_choices, pos), "</select></div>",
           "</div>",
           "<label class=\"dp-label\">Body type</label>",
-          "<input type=\"text\" name=\"body_type\" value=\"", bt, "\" class=\"dp-input\" maxlength=\"50\" placeholder=\"e.g. athletic, average, stocky\"/>",
+          "<select name=\"body_type\" class=\"dp-input\">", select_options(body_type_choices, bt), "</select>",
           "<label class=\"dp-label\">Looking for</label>",
-          "<input type=\"text\" name=\"looking_for\" value=\"", looking, "\" class=\"dp-input\" maxlength=\"200\" placeholder=\"What are you looking for?\"/>",
+          "<textarea name=\"looking_for\" rows=\"2\" class=\"dp-input\" maxlength=\"200\" placeholder=\"Dates, chats, right now, friends...\">", looking, "</textarea>",
           "<button type=\"submit\" class=\"dp-btn dp-btn-fire\">Save</button>",
         "</form>",
         "<div id=\"profile-msg\" class=\"dp-success\" style=\"display:none\">Saved!</div>",
@@ -202,8 +270,8 @@ defmodule <%= @app_module %>.Views do
     avatar = profile["avatar_url"] || ""
     age = profile["age"]
     looking = HTML.escape(profile["looking_for"] || "")
-    bt = HTML.escape(profile["body_type"] || "")
-    pos = HTML.escape(profile["position"] || "")
+    bt = HTML.escape(choice_label(profile["body_type"] || ""))
+    pos = HTML.escape(choice_label(profile["position"] || ""))
 
     avatar_html = case avatar do
       "" -> "<div class=\"dp-profile-avatar-letter\">" <> HTML.escape(first_char(dn)) <> "</div>"
@@ -249,6 +317,79 @@ defmodule <%= @app_module %>.Views do
   defp filter_nonempty([], acc), do: :lists.reverse(acc)
   defp filter_nonempty([{_, ""} | t], acc), do: filter_nonempty(t, acc)
   defp filter_nonempty([h | t], acc), do: filter_nonempty(t, [h | acc])
+
+  defp select_options([], _selected), do: []
+  defp select_options([{value, label} | t], selected) do
+    sel_attr = if value == selected, do: " selected", else: ""
+
+    [
+      "<option value=\"",
+      HTML.escape(value),
+      "\"",
+      sel_attr,
+      ">",
+      HTML.escape(label),
+      "</option>"
+      | select_options(t, selected)
+    ]
+  end
+
+  defp ensure_choice(options, ""), do: options
+  defp ensure_choice(options, current) do
+    case option_member?(options, current) do
+      true ->
+        options
+
+      false ->
+        case options do
+          [head | tail] -> [head, {current, current} | tail]
+          [] -> [{current, current}]
+        end
+    end
+  end
+
+  defp option_member?([], _), do: false
+  defp option_member?([{value, _} | _], value), do: true
+  defp option_member?([_ | t], value), do: option_member?(t, value)
+
+  defp normalize_choice(val) when is_binary(val), do: ascii_downcase(val, [])
+  defp normalize_choice(_), do: ""
+
+  defp choice_label("top"), do: "Top"
+  defp choice_label("bottom"), do: "Bottom"
+  defp choice_label("vers"), do: "Vers"
+  defp choice_label("side"), do: "Side"
+  defp choice_label("slim"), do: "Slim"
+  defp choice_label("athletic"), do: "Athletic"
+  defp choice_label("average"), do: "Average"
+  defp choice_label("muscular"), do: "Muscular"
+  defp choice_label("stocky"), do: "Stocky"
+  defp choice_label("bear"), do: "Bear"
+  defp choice_label("not_saying"), do: "Not saying"
+  defp choice_label(val) when is_binary(val), do: val
+  defp choice_label(_), do: ""
+
+  defp profile_completion_count([], count), do: count
+  defp profile_completion_count([h | t], count) do
+    next = if present_value?(h), do: count + 1, else: count
+    profile_completion_count(t, next)
+  end
+
+  defp present_value?(nil), do: false
+  defp present_value?(val) when is_binary(val), do: has_visible_char?(val)
+  defp present_value?(val) when is_integer(val), do: val > 0
+  defp present_value?(val) when is_float(val), do: val > 0.0
+  defp present_value?(_), do: false
+
+  defp has_visible_char?(<<>>), do: false
+  defp has_visible_char?(<<c, rest::binary>>) when c == 32 or c == 9 or c == 10 or c == 13,
+    do: has_visible_char?(rest)
+  defp has_visible_char?(<<_, _rest::binary>>), do: true
+
+  defp ascii_downcase(<<>>, acc), do: :erlang.list_to_binary(:lists.reverse(acc))
+  defp ascii_downcase(<<c, rest::binary>>, acc) when c >= ?A and c <= ?Z,
+    do: ascii_downcase(rest, [c + 32 | acc])
+  defp ascii_downcase(<<c, rest::binary>>, acc), do: ascii_downcase(rest, [c | acc])
 
   # --- Fragment: Messages List ---
 
@@ -319,11 +460,12 @@ defmodule <%= @app_module %>.Views do
           "<h2>", other_name, "</h2>",
           "<a href=\"/profile/", other_id, "\" class=\"dp-convo-profile\" data-nav>View profile</a>",
         "</div>",
-        "<div id=\"messages\" class=\"dp-messages\">", msg_html, "</div>",
+        "<div id=\"messages\" class=\"dp-messages\" aria-live=\"polite\">", msg_html, "</div>",
+        "<p id=\"msg-meta\" class=\"dp-msg-meta\">Each message costs 1 token.</p>",
         "<form id=\"msg-form\" class=\"dp-msg-form\" data-other=\"", other_id, "\">",
           "<input type=\"text\" name=\"content\" placeholder=\"Type a message...\" class=\"dp-input dp-input-grow\" autocomplete=\"off\" maxlength=\"2000\"/>",
           "<div style=\"position:absolute;left:-9999px\" aria-hidden=\"true\"><input type=\"text\" name=\"_hp\" tabindex=\"-1\" autocomplete=\"off\"/></div>",
-          "<button type=\"submit\" class=\"dp-btn dp-btn-fire\">Send</button>",
+          "<button id=\"msg-send\" type=\"submit\" class=\"dp-btn dp-btn-fire\">Send</button>",
         "</form>",
       "</div>"
     ])

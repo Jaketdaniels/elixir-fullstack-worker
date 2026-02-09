@@ -103,7 +103,9 @@ defmodule Mix.Tasks.ElixirWorkers.Build do
 
     # 4. Detect startup module: find the module that uses ElixirWorkers.App
     startup_beam = detect_startup_module()
-    startup_name = String.replace_trailing(startup_beam, ".beam", "") |> String.replace_leading("Elixir.", "")
+
+    startup_name =
+      String.replace_trailing(startup_beam, ".beam", "") |> String.replace_leading("Elixir.", "")
 
     step("packing", "app.avm (startup: #{startup_name})")
 
@@ -132,6 +134,7 @@ defmodule Mix.Tasks.ElixirWorkers.Build do
     size_kb = Float.round(total_size / 1024, 1)
 
     IO.puts("")
+
     IO.puts(
       "  #{IO.ANSI.green()}#{IO.ANSI.bright()}Built#{IO.ANSI.reset()} " <>
         "_build/worker/app.avm " <>
@@ -142,9 +145,7 @@ defmodule Mix.Tasks.ElixirWorkers.Build do
   defp step(action, detail) do
     padded = String.pad_trailing(action, 12)
 
-    IO.puts(
-      "  #{IO.ANSI.magenta()}#{padded}#{IO.ANSI.reset()} #{detail}"
-    )
+    IO.puts("  #{IO.ANSI.magenta()}#{padded}#{IO.ANSI.reset()} #{detail}")
   end
 
   defp detect_startup_module do
@@ -166,7 +167,8 @@ defmodule Mix.Tasks.ElixirWorkers.Build do
         end)
       end
 
-    startup || Mix.raise("No module found with `use ElixirWorkers.App`. Define your app entry point.")
+    startup ||
+      Mix.raise("No module found with `use ElixirWorkers.App`. Define your app entry point.")
   end
 
   defp find_ex_files(dir) do
@@ -231,7 +233,9 @@ defmodule Mix.Tasks.ElixirWorkers.Build do
     # Filter to stdlib modules we haven't visited yet
     new_mods =
       to_check
-      |> Enum.filter(fn mod -> Map.has_key?(stdlib_index, mod) and not Map.has_key?(found, mod) end)
+      |> Enum.filter(fn mod ->
+        Map.has_key?(stdlib_index, mod) and not Map.has_key?(found, mod)
+      end)
 
     if new_mods == [] do
       found

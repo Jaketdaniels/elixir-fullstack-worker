@@ -23,18 +23,23 @@ defmodule Mix.Tasks.ElixirWorkers.Dev do
     apply_schema(project_root)
 
     IO.puts("")
-    IO.puts("  #{IO.ANSI.magenta()}#{IO.ANSI.bright()}elixir-workers#{IO.ANSI.reset()} #{IO.ANSI.faint()}dev#{IO.ANSI.reset()}")
+
+    IO.puts(
+      "  #{IO.ANSI.magenta()}#{IO.ANSI.bright()}elixir-workers#{IO.ANSI.reset()} #{IO.ANSI.faint()}dev#{IO.ANSI.reset()}"
+    )
+
     IO.puts("  #{IO.ANSI.cyan()}http://localhost:8797#{IO.ANSI.reset()}")
     IO.puts("")
 
-    port = Port.open({:spawn_executable, System.find_executable("npx")}, [
-      :binary,
-      :exit_status,
-      :use_stdio,
-      :stderr_to_stdout,
-      args: ["wrangler", "dev"],
-      cd: project_root
-    ])
+    port =
+      Port.open({:spawn_executable, System.find_executable("npx")}, [
+        :binary,
+        :exit_status,
+        :use_stdio,
+        :stderr_to_stdout,
+        args: ["wrangler", "dev"],
+        cd: project_root
+      ])
 
     stream_port(port)
   end
@@ -46,21 +51,30 @@ defmodule Mix.Tasks.ElixirWorkers.Dev do
     if File.exists?(schema_path) and File.exists?(wrangler_path) do
       case parse_database_name(wrangler_path) do
         {:ok, db_name} ->
-          IO.puts("  #{IO.ANSI.faint()}Applying schema to local D1 (#{db_name})...#{IO.ANSI.reset()}")
+          IO.puts(
+            "  #{IO.ANSI.faint()}Applying schema to local D1 (#{db_name})...#{IO.ANSI.reset()}"
+          )
 
           {output, status} =
-            System.cmd("npx", ["wrangler", "d1", "execute", db_name, "--local", "--file=schema.sql"],
+            System.cmd(
+              "npx",
+              ["wrangler", "d1", "execute", db_name, "--local", "--file=schema.sql"],
               cd: project_root,
               stderr_to_stdout: true
             )
 
           if status != 0 do
-            IO.puts("  #{IO.ANSI.yellow()}Warning: schema apply returned status #{status}#{IO.ANSI.reset()}")
+            IO.puts(
+              "  #{IO.ANSI.yellow()}Warning: schema apply returned status #{status}#{IO.ANSI.reset()}"
+            )
+
             IO.puts("  #{IO.ANSI.faint()}#{String.trim(output)}#{IO.ANSI.reset()}")
           end
 
         :error ->
-          IO.puts("  #{IO.ANSI.yellow()}Warning: could not parse database_name from wrangler.jsonc#{IO.ANSI.reset()}")
+          IO.puts(
+            "  #{IO.ANSI.yellow()}Warning: could not parse database_name from wrangler.jsonc#{IO.ANSI.reset()}"
+          )
       end
     end
   end

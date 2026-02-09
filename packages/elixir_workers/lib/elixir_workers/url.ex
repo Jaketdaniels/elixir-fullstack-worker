@@ -59,6 +59,7 @@ defmodule ElixirWorkers.URL do
   defp split_on_slash(bin, pos, seg_start, acc) do
     if pos >= byte_size(bin) do
       seg_len = pos - seg_start
+
       if seg_len > 0 do
         :lists.reverse([:binary.part(bin, seg_start, seg_len) | acc])
       else
@@ -68,6 +69,7 @@ defmodule ElixirWorkers.URL do
       case :binary.at(bin, pos) do
         ?/ ->
           seg_len = pos - seg_start
+
           if seg_len > 0 do
             split_on_slash(bin, pos + 1, pos + 1, [:binary.part(bin, seg_start, seg_len) | acc])
           else

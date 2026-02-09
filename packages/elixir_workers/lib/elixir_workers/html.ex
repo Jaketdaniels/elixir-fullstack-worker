@@ -12,9 +12,14 @@ defmodule ElixirWorkers.HTML do
   # Build an HTML tag: tag("div", %{"class" => "card"}, "content") -> "<div class=\"card\">content</div>"
   def tag(name, attrs, content) when is_binary(name) do
     :erlang.iolist_to_binary([
-      "<", name, encode_attrs(attrs), ">",
+      "<",
+      name,
+      encode_attrs(attrs),
+      ">",
       content,
-      "</", name, ">"
+      "</",
+      name,
+      ">"
     ])
   end
 
