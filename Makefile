@@ -105,8 +105,11 @@ deploy: $(STARTER_DIR)
 
 clean:
 	rm -rf build/
-	rm -rf $(STARTER_DIR)
 	rm -f packages/elixir_workers/priv/.built
+	@# Clean build artifacts inside the starter project, but preserve the project itself
+	rm -rf $(STARTER_DIR)/_build
+	rm -rf $(STARTER_DIR)/deps
 
 clean-all: clean
+	rm -rf $(STARTER_DIR)
 	rm -rf vendor/AtomVM
