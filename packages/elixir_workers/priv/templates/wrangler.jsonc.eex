@@ -32,9 +32,30 @@
     { "binding": "DB", "database_name": "phoenix-db", "database_id": "phoenix-db-id" }
   ],
 
+  // R2 bucket (media uploads: profile images, chat attachments)
+  // "r2_buckets": [
+  //   { "binding": "MEDIA", "bucket_name": "<%= @app_name %>-media" }
+  // ],
+
   // Environment variables
   // BETTER_AUTH_SECRET is loaded from .dev.vars (local) or Workers secrets (production)
   "vars": {
     "BETTER_AUTH_URL": "http://localhost:<%= @port %>"
+  },
+
+  // Staging environment — override bindings and vars for pre-production testing
+  "env": {
+    "staging": {
+      "name": "<%= @app_name %>-staging",
+      "vars": {
+        "BETTER_AUTH_URL": "https://<%= @app_name %>-staging.YOURDOMAIN.workers.dev"
+      },
+      "kv_namespaces": [
+        { "binding": "LOCATIONS", "id": "staging-locations-kv-id" }
+      ],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "phoenix-db-staging", "database_id": "staging-phoenix-db-id" }
+      ]
+    }
   }
 }

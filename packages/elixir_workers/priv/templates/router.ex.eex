@@ -49,13 +49,17 @@ defmodule <%= @app_module %>.Router do
       # API — messages
       {"POST", ["api", "messages"], &api_message_send/1},
       {"GET", ["api", "messages", ":id"], &api_conversation/1},
+      {"GET", ["api", "messages", ":id", "newer"], &api_conversation_newer/1},
+      {"GET", ["api", "messages", ":id", "older"], &api_conversation_older/1},
       {"GET", ["api", "conversations"], &api_conversations/1},
       {"POST", ["api", "messages", ":id", "read"], &api_mark_read/1},
+      {"POST", ["api", "messages", ":id", "typing"], &api_typing/1},
 
       # API — tokens
       {"GET", ["api", "tokens"], &api_tokens_get/1},
       {"POST", ["api", "tokens", "purchase"], &api_tokens_purchase/1},
       {"POST", ["api", "tokens", "daily"], &api_tokens_daily/1},
+      {"GET", ["api", "tokens", "history"], &api_tokens_history/1},
 
       # API — moderation
       {"POST", ["api", "report"], &api_report/1},
@@ -68,6 +72,9 @@ defmodule <%= @app_module %>.Router do
 
       # API — anti-spam
       {"POST", ["api", "spam", "check"], &api_spam_check/1},
+
+      # API — public stats (landing page hero)
+      {"GET", ["api", "stats"], &api_public_stats/1},
 
       # API — admin
       {"GET", ["api", "admin", "stats"], &api_admin_stats/1}
@@ -91,6 +98,50 @@ defmodule <%= @app_module %>.Router do
     case get_auth(conn) do
       nil -> {:error, Conn.json(conn, 401, %{"error" => "unauthorized"})}
       auth -> {:ok, conn, auth}
+    end
+  end
+
+  defp require_admin(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> {:error, conn}
+      {:ok, conn, auth} ->
+        # Check admin status via env var ADMIN_EMAILS (comma-separated)
+        admin_emails = conn["_state"]["_admin_emails"] || ""
+        email = auth["email"] || ""
+        if admin_email?(admin_emails, email) do
+          {:ok, conn, auth}
+        else
+          {:error, Conn.json(conn, 403, %{"error" => "forbidden"})}
+        end
+    end
+  end
+
+  defp admin_email?(_admin_str, email) when byte_size(email) == 0, do: false
+  defp admin_email?(admin_str, _email) when byte_size(admin_str) == 0, do: false
+  defp admin_email?(admin_str, email) do
+    # Check if email appears in comma-separated admin list
+    check_csv_member(admin_str, email)
+  end
+
+  defp check_csv_member(csv, target) do
+    csv_trimmed = trim_spaces(csv)
+    case :binary.match(csv_trimmed, ",") do
+      :nomatch -> trim_spaces(csv_trimmed) == target
+      {pos, _} ->
+        head = trim_spaces(:binary.part(csv_trimmed, 0, pos))
+        rest = :binary.part(csv_trimmed, pos + 1, byte_size(csv_trimmed) - pos - 1)
+        head == target or check_csv_member(rest, target)
+    end
+  end
+
+  defp trim_spaces(<<32, rest::binary>>), do: trim_spaces(rest)
+  defp trim_spaces(str), do: trim_trailing(str)
+  defp trim_trailing(<<>>), do: <<>>
+  defp trim_trailing(str) do
+    len = byte_size(str)
+    case :binary.at(str, len - 1) do
+      32 -> trim_trailing(:binary.part(str, 0, len - 1))
+      _ -> str
     end
   end
 
@@ -222,11 +273,20 @@ defmodule <%= @app_module %>.Router do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         id = conn["path_params"]["id"]
-        {conn, profile} = D1.query_one(conn, "DB",
-          "SELECT p.* FROM profiles p WHERE p.user_id = ?", [id])
-        case profile do
-          nil -> Conn.html(conn, 404, "<div class=\"dp-container dp-page dp-center\"><h1>404</h1><p class=\"dp-muted\">User not found</p></div>")
-          _ -> Conn.html(conn, 200, <%= @app_module %>.Views.frag_profile_view(auth, profile))
+        uid = auth["userId"]
+        # Check if blocked (either direction)
+        {conn, block} = D1.query_one(conn, "DB",
+          "SELECT 1 as b FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
+          [uid, id, id, uid])
+        if block != nil do
+          Conn.html(conn, 403, "<div class=\"dp-container dp-page dp-center\"><h1>Blocked</h1><p class=\"dp-muted\">This profile is not available</p></div>")
+        else
+          {conn, profile} = D1.query_one(conn, "DB",
+            "SELECT p.* FROM profiles p WHERE p.user_id = ?", [id])
+          case profile do
+            nil -> Conn.html(conn, 404, "<div class=\"dp-container dp-page dp-center\"><h1>404</h1><p class=\"dp-muted\">User not found</p></div>")
+            _ -> Conn.html(conn, 200, <%= @app_module %>.Views.frag_profile_view(auth, profile))
+          end
         end
     end
   end
@@ -249,17 +309,26 @@ defmodule <%= @app_module %>.Router do
       {:ok, conn, auth} ->
         other_id = conn["path_params"]["id"]
         uid = auth["userId"]
-        {conn, msgs} = D1.query(conn, "DB",
-          "SELECT m.*, p.display_name FROM messages m LEFT JOIN profiles p ON p.user_id = m.from_id WHERE (m.from_id = ? AND m.to_id = ?) OR (m.from_id = ? AND m.to_id = ?) ORDER BY m.created_at ASC LIMIT 100",
+        # Check if blocked
+        {conn, block} = D1.query_one(conn, "DB",
+          "SELECT 1 as b FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
           [uid, other_id, other_id, uid])
-        {conn, other_profile} = D1.query_one(conn, "DB",
-          "SELECT * FROM profiles WHERE user_id = ?", [other_id])
+        if block != nil do
+          Conn.html(conn, 403, "<div class=\"dp-container dp-page dp-center\"><h1>Blocked</h1><p class=\"dp-muted\">This conversation is not available</p></div>")
+        else
+          {conn, msgs} = D1.query(conn, "DB",
+            "SELECT m.id, m.from_id, m.to_id, m.content, m.media_url, m.message_type, m.read, m.created_at, p.display_name FROM messages m LEFT JOIN profiles p ON p.user_id = m.from_id WHERE (m.from_id = ? AND m.to_id = ?) OR (m.from_id = ? AND m.to_id = ?) ORDER BY m.id DESC LIMIT 50",
+            [uid, other_id, other_id, uid])
+          {conn, other_profile} = D1.query_one(conn, "DB",
+            "SELECT * FROM profiles WHERE user_id = ?", [other_id])
 
-        conn = D1.exec(conn, "DB",
-          "UPDATE messages SET read = 1 WHERE to_id = ? AND from_id = ? AND read = 0",
-          [uid, other_id])
+          conn = D1.exec(conn, "DB",
+            "UPDATE messages SET read = 1 WHERE to_id = ? AND from_id = ? AND read = 0",
+            [uid, other_id])
 
-        Conn.html(conn, 200, <%= @app_module %>.Views.frag_conversation(auth, other_profile || %{}, msgs || []))
+          reversed = reverse_list(msgs || [])
+          Conn.html(conn, 200, <%= @app_module %>.Views.frag_conversation(auth, other_profile || %{}, reversed))
+        end
     end
   end
 
@@ -274,7 +343,7 @@ defmodule <%= @app_module %>.Router do
   end
 
   defp frag_admin(conn) do
-    case require_auth_api(conn) do
+    case require_admin(conn) do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         {conn, user_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM user", [])
@@ -343,6 +412,10 @@ defmodule <%= @app_module %>.Router do
         case {lat, lng} do
           {nil, _} -> Conn.json(conn, 400, %{"error" => "lat required"})
           {_, nil} -> Conn.json(conn, 400, %{"error" => "lng required"})
+          _ when not is_number(lat) or not is_number(lng) ->
+            Conn.json(conn, 400, %{"error" => "lat/lng must be numbers"})
+          _ when lat < -90.0 or lat > 90.0 or lng < -180.0 or lng > 180.0 ->
+            Conn.json(conn, 400, %{"error" => "lat/lng out of range"})
           _ ->
             {conn, profile} = D1.query_one(conn, "DB",
               "SELECT display_name, avatar_url FROM profiles WHERE user_id = ?", [auth["userId"]])
@@ -376,8 +449,27 @@ defmodule <%= @app_module %>.Router do
     case require_auth_api(conn) do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
-        # Get blocked user IDs to filter
         uid = auth["userId"]
+        qs = conn["query_string"] || ""
+
+        # Parse filter params
+        max_dist_str = get_query_param(qs, "max_distance")
+        min_age_str = get_query_param(qs, "min_age")
+        max_age_str = get_query_param(qs, "max_age")
+        body_type_filter = get_query_param(qs, "body_type")
+        position_filter = get_query_param(qs, "position")
+        tribe_filter = get_query_param(qs, "tribe")
+
+        filters = %{
+          "max_distance" => safe_parse_float(max_dist_str),
+          "min_age" => safe_parse_int(min_age_str),
+          "max_age" => safe_parse_int(max_age_str),
+          "body_type" => split_csv(body_type_filter),
+          "position" => split_csv(position_filter),
+          "tribe" => split_csv(tribe_filter)
+        }
+
+        # Get blocked user IDs
         {conn, blocked_rows} = D1.query(conn, "DB",
           "SELECT blocked_id FROM blocks WHERE blocker_id = ? UNION SELECT blocker_id FROM blocks WHERE blocked_id = ?",
           [uid, uid])
@@ -386,13 +478,33 @@ defmodule <%= @app_module %>.Router do
           rows -> map_vals(rows, "blocked_id")
         end
 
+        # Get own location for distance calc
+        {conn, my_loc_raw} = KV.get(conn, "LOCATIONS", "loc:" <> uid)
+        my_loc = case my_loc_raw do
+          nil -> nil
+          v -> ElixirWorkers.JSON.decode(v)
+        end
+
         {conn, result} = KV.list(conn, "LOCATIONS", %{"prefix" => "loc:"})
         case result do
           nil -> Conn.json(conn, 200, %{"users" => []})
           r ->
             keys = r["keys"] || []
             {conn, locations} = fetch_locations(conn, keys, [], blocked_ids, uid)
-            Conn.json(conn, 200, %{"users" => locations})
+
+            # Enrich with profile data if filters are active
+            has_filters = filters["max_distance"] != nil or filters["min_age"] != nil or
+                          filters["max_age"] != nil or filters["body_type"] != [] or
+                          filters["position"] != [] or filters["tribe"] != []
+
+            if has_filters do
+              user_ids = map_vals_key(locations, "user_id")
+              {conn, profiles} = fetch_profiles_for_ids(conn, user_ids)
+              filtered = apply_filters(locations, profiles, filters, my_loc)
+              Conn.json(conn, 200, %{"users" => filtered})
+            else
+              Conn.json(conn, 200, %{"users" => locations})
+            end
         end
     end
   end
@@ -414,6 +526,188 @@ defmodule <%= @app_module %>.Router do
     end
   end
 
+  defp fetch_profiles_for_ids(conn, []), do: {conn, %{}}
+  defp fetch_profiles_for_ids(conn, ids) do
+    fetch_profiles_acc(conn, ids, %{})
+  end
+
+  defp fetch_profiles_acc(conn, [], acc), do: {conn, acc}
+  defp fetch_profiles_acc(conn, [id | rest], acc) do
+    {conn, profile} = D1.query_one(conn, "DB",
+      "SELECT user_id, age, body_type, position, tribe FROM profiles WHERE user_id = ?", [id])
+    new_acc = case profile do
+      nil -> acc
+      p -> put_map(acc, id, p)
+    end
+    fetch_profiles_acc(conn, rest, new_acc)
+  end
+
+  defp put_map(map, key, val) do
+    :maps.put(key, val, map)
+  end
+
+  defp apply_filters(locations, profiles, filters, my_loc) do
+    apply_filters_acc(locations, profiles, filters, my_loc, [])
+  end
+
+  defp apply_filters_acc([], _profiles, _filters, _my_loc, acc), do: :lists.reverse(acc)
+  defp apply_filters_acc([loc | rest], profiles, filters, my_loc, acc) do
+    uid = loc["user_id"] || ""
+    profile = case :maps.find(uid, profiles) do
+      {:ok, p} -> p
+      :error -> %{}
+    end
+
+    passes = passes_distance?(loc, my_loc, filters["max_distance"]) and
+             passes_age?(profile, filters["min_age"], filters["max_age"]) and
+             passes_list_filter?(profile["body_type"], filters["body_type"]) and
+             passes_list_filter?(profile["position"], filters["position"]) and
+             passes_list_filter?(profile["tribe"], filters["tribe"])
+
+    if passes do
+      # Enrich location with profile data for display
+      enriched = enrich_location(loc, profile, my_loc)
+      apply_filters_acc(rest, profiles, filters, my_loc, [enriched | acc])
+    else
+      apply_filters_acc(rest, profiles, filters, my_loc, acc)
+    end
+  end
+
+  defp enrich_location(loc, profile, my_loc) do
+    loc2 = case profile["age"] do
+      nil -> loc
+      age -> put_map(loc, "age", age)
+    end
+    loc3 = case profile["body_type"] do
+      nil -> loc2
+      "" -> loc2
+      bt -> put_map(loc2, "body_type", bt)
+    end
+    loc4 = case profile["position"] do
+      nil -> loc3
+      "" -> loc3
+      pos -> put_map(loc3, "position", pos)
+    end
+    loc5 = case profile["tribe"] do
+      nil -> loc4
+      "" -> loc4
+      tr -> put_map(loc4, "tribe", tr)
+    end
+    case my_loc do
+      nil -> loc5
+      _ ->
+        dist = haversine_km(my_loc["lat"], my_loc["lng"], loc["lat"], loc["lng"])
+        put_map(loc5, "distance_km", round_to(dist, 1))
+    end
+  end
+
+  defp round_to(val, decimals) when is_float(val) do
+    mult = :math.pow(10, decimals)
+    round(val * mult) / mult
+  end
+  defp round_to(val, _), do: val
+
+  defp passes_distance?(_loc, _my_loc, nil), do: true
+  defp passes_distance?(_loc, nil, _max), do: true
+  defp passes_distance?(loc, my_loc, max_km) do
+    dist = haversine_km(my_loc["lat"], my_loc["lng"], loc["lat"], loc["lng"])
+    dist <= max_km
+  end
+
+  defp passes_age?(_profile, nil, nil), do: true
+  defp passes_age?(profile, min_age, max_age) do
+    age = profile["age"]
+    case age do
+      nil -> true
+      a when is_integer(a) ->
+        above_min = case min_age do
+          nil -> true
+          m -> a >= m
+        end
+        below_max = case max_age do
+          nil -> true
+          m -> a <= m
+        end
+        above_min and below_max
+      _ -> true
+    end
+  end
+
+  defp passes_list_filter?(_value, []), do: true
+  defp passes_list_filter?(nil, _filter), do: true
+  defp passes_list_filter?("", _filter), do: true
+  defp passes_list_filter?(value, filter) when is_binary(value) do
+    normalized = ascii_downcase_str(value)
+    list_member?(filter, normalized)
+  end
+  defp passes_list_filter?(_, _), do: true
+
+  defp ascii_downcase_str(str), do: ascii_dc(str, [])
+  defp ascii_dc(<<>>, acc), do: :erlang.list_to_binary(:lists.reverse(acc))
+  defp ascii_dc(<<c, rest::binary>>, acc) when c >= ?A and c <= ?Z,
+    do: ascii_dc(rest, [c + 32 | acc])
+  defp ascii_dc(<<c, rest::binary>>, acc), do: ascii_dc(rest, [c | acc])
+
+  defp safe_parse_int(nil), do: nil
+  defp safe_parse_int(""), do: nil
+  defp safe_parse_int(str) when is_binary(str) do
+    case Integer.parse(str) do
+      {n, _} -> n
+      :error -> nil
+    end
+  end
+  defp safe_parse_int(_), do: nil
+
+  defp safe_parse_float(nil), do: nil
+  defp safe_parse_float(""), do: nil
+  defp safe_parse_float(str) when is_binary(str) do
+    case Float.parse(str) do
+      {f, _} -> f
+      :error ->
+        case Integer.parse(str) do
+          {n, _} -> n * 1.0
+          :error -> nil
+        end
+    end
+  end
+  defp safe_parse_float(_), do: nil
+
+  defp split_csv(nil), do: []
+  defp split_csv(""), do: []
+  defp split_csv(str) when is_binary(str) do
+    split_csv_acc(str, [], [])
+  end
+  defp split_csv(_), do: []
+
+  defp split_csv_acc(<<>>, current, acc) do
+    item = :erlang.list_to_binary(:lists.reverse(current))
+    trimmed = ascii_downcase_str(item)
+    case trimmed do
+      "" -> :lists.reverse(acc)
+      _ -> :lists.reverse([trimmed | acc])
+    end
+  end
+  defp split_csv_acc(<<?,, rest::binary>>, current, acc) do
+    item = :erlang.list_to_binary(:lists.reverse(current))
+    trimmed = ascii_downcase_str(item)
+    case trimmed do
+      "" -> split_csv_acc(rest, [], acc)
+      _ -> split_csv_acc(rest, [], [trimmed | acc])
+    end
+  end
+  defp split_csv_acc(<<c, rest::binary>>, current, acc) do
+    split_csv_acc(rest, [c | current], acc)
+  end
+
+  defp map_vals_key([], _key), do: []
+  defp map_vals_key([h | t], key) do
+    val = h[key]
+    case val do
+      nil -> map_vals_key(t, key)
+      _ -> [val | map_vals_key(t, key)]
+    end
+  end
+
   defp list_member?([], _), do: false
   defp list_member?([h | _], h), do: true
   defp list_member?([_ | t], val), do: list_member?(t, val)
@@ -424,13 +718,22 @@ defmodule <%= @app_module %>.Router do
   defp api_profile_get(conn) do
     case require_auth_api(conn) do
       {:error, conn} -> conn
-      {:ok, conn, _auth} ->
+      {:ok, conn, auth} ->
         id = conn["path_params"]["id"]
-        {conn, profile} = D1.query_one(conn, "DB",
-          "SELECT user_id, display_name, bio, avatar_url, age, looking_for, body_type, position, is_verified, created_at FROM profiles WHERE user_id = ?", [id])
-        case profile do
-          nil -> Conn.json(conn, 404, %{"error" => "not_found"})
-          _ -> Conn.json(conn, 200, profile)
+        uid = auth["userId"]
+        # Check if blocked
+        {conn, block} = D1.query_one(conn, "DB",
+          "SELECT 1 as b FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
+          [uid, id, id, uid])
+        if block != nil do
+          Conn.json(conn, 403, %{"error" => "blocked"})
+        else
+          {conn, profile} = D1.query_one(conn, "DB",
+            "SELECT user_id, display_name, bio, avatar_url, age, looking_for, body_type, position, tribe, is_verified, created_at FROM profiles WHERE user_id = ?", [id])
+          case profile do
+            nil -> Conn.json(conn, 404, %{"error" => "not_found"})
+            _ -> Conn.json(conn, 200, profile)
+          end
         end
     end
   end
@@ -447,11 +750,24 @@ defmodule <%= @app_module %>.Router do
         looking_for = body["looking_for"] || ""
         body_type_val = body["body_type"] || ""
         position = body["position"] || ""
+        tribe = body["tribe"] || ""
 
-        conn = D1.exec(conn, "DB",
-          "INSERT INTO profiles (user_id, display_name, bio, avatar_url, age, looking_for, body_type, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name, bio = excluded.bio, avatar_url = excluded.avatar_url, age = excluded.age, looking_for = excluded.looking_for, body_type = excluded.body_type, position = excluded.position",
-          [auth["userId"], display_name, bio, avatar_url, age, looking_for, body_type_val, position])
-        Conn.json(conn, 200, %{"ok" => true})
+        # Input validation
+        cond do
+          byte_size(display_name) > 100 ->
+            Conn.json(conn, 400, %{"error" => "display_name too long (max 100)"})
+          byte_size(bio) > 500 ->
+            Conn.json(conn, 400, %{"error" => "bio too long (max 500)"})
+          byte_size(looking_for) > 200 ->
+            Conn.json(conn, 400, %{"error" => "looking_for too long (max 200)"})
+          is_integer(age) and (age < 18 or age > 120) ->
+            Conn.json(conn, 400, %{"error" => "age must be 18-120"})
+          true ->
+            conn = D1.exec(conn, "DB",
+              "INSERT INTO profiles (user_id, display_name, bio, avatar_url, age, looking_for, body_type, position, tribe) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name, bio = excluded.bio, avatar_url = excluded.avatar_url, age = excluded.age, looking_for = excluded.looking_for, body_type = excluded.body_type, position = excluded.position, tribe = excluded.tribe",
+              [auth["userId"], display_name, bio, avatar_url, age, looking_for, body_type_val, position, tribe])
+            Conn.json(conn, 200, %{"ok" => true})
+        end
     end
   end
 
@@ -461,46 +777,64 @@ defmodule <%= @app_module %>.Router do
       {:ok, conn, auth} ->
         body = conn["parsed_body"] || %{}
         to_id = body["to_id"]
-        content = body["content"]
+        content = body["content"] || ""
+        media_url = body["media_url"] || ""
+        message_type = body["message_type"] || "text"
+
+        # Validate message_type
+        message_type = if message_type == "image", do: "image", else: "text"
+
+        # For image messages, content can be empty; for text, content is required
+        has_content = byte_size(content) > 0
+        has_media = byte_size(media_url) > 0
 
         cond do
           to_id == nil -> Conn.json(conn, 400, %{"error" => "to_id required"})
-          content == nil -> Conn.json(conn, 400, %{"error" => "content required"})
-          byte_size(content || "") > 2000 -> Conn.json(conn, 400, %{"error" => "content too long"})
+          not has_content and not has_media -> Conn.json(conn, 400, %{"error" => "content or media required"})
+          byte_size(content) > 2000 -> Conn.json(conn, 400, %{"error" => "content too long"})
+          to_id == auth["userId"] -> Conn.json(conn, 400, %{"error" => "cannot message yourself"})
           true ->
-            # Anti-spam check
-            case check_spam(body) do
-              {:spam, _reason} ->
-                Conn.json(conn, 200, %{"sent" => true, "tokens_remaining" => 0})
-              _ ->
-                # Check if blocked
-                uid = auth["userId"]
-                {conn, block} = D1.query_one(conn, "DB",
-                  "SELECT 1 as b FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
-                  [uid, to_id, to_id, uid])
+            uid = auth["userId"]
+            # Rate limit: 30 messages per minute
+            rl_key = "msg:" <> uid
+            case check_rate_limit(conn, rl_key, 30, 60) do
+              {:error, conn, _} ->
+                Conn.json(conn, 429, %{"error" => "rate_limited", "retry_after" => 60})
+              {:ok, conn, _remaining} ->
+                # Anti-spam check
+                case check_spam(body) do
+                  {:spam, _reason} ->
+                    Conn.json(conn, 200, %{"sent" => true, "tokens_remaining" => 0})
+                  _ ->
+                    # Check if blocked
+                    {conn, block} = D1.query_one(conn, "DB",
+                      "SELECT 1 as b FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
+                      [uid, to_id, to_id, uid])
 
-                if block != nil do
-                  Conn.json(conn, 403, %{"error" => "blocked"})
-                else
-                  {conn, token_row} = D1.query_one(conn, "DB",
-                    "SELECT balance FROM tokens WHERE user_id = ?", [uid])
+                    if block != nil do
+                      Conn.json(conn, 403, %{"error" => "blocked"})
+                    else
+                      {conn, token_row} = D1.query_one(conn, "DB",
+                        "SELECT balance FROM tokens WHERE user_id = ?", [uid])
 
-                  balance = case token_row do
-                    nil -> 0
-                    r -> r["balance"] || 0
-                  end
+                      balance = case token_row do
+                        nil -> 0
+                        r -> r["balance"] || 0
+                      end
 
-                  if balance > 0 do
-                    conn = D1.batch(conn, "DB", [
-                      %{"sql" => "UPDATE tokens SET balance = balance - 1 WHERE user_id = ?",
-                        "params" => [uid]},
-                      %{"sql" => "INSERT INTO messages (from_id, to_id, content) VALUES (?, ?, ?)",
-                        "params" => [uid, to_id, content]}
-                    ])
-                    Conn.json(conn, 201, %{"sent" => true, "tokens_remaining" => balance - 1})
-                  else
-                    Conn.json(conn, 402, %{"error" => "insufficient_tokens"})
-                  end
+                      if balance > 0 do
+                        # Atomic balance guard prevents TOCTOU race
+                        conn = D1.batch(conn, "DB", [
+                          %{"sql" => "UPDATE tokens SET balance = balance - 1 WHERE user_id = ? AND balance > 0",
+                            "params" => [uid]},
+                          %{"sql" => "INSERT INTO messages (from_id, to_id, content, media_url, message_type) VALUES (?, ?, ?, ?, ?)",
+                            "params" => [uid, to_id, content, media_url, message_type]}
+                        ])
+                        Conn.json(conn, 201, %{"sent" => true, "tokens_remaining" => balance - 1})
+                      else
+                        Conn.json(conn, 402, %{"error" => "insufficient_tokens"})
+                      end
+                    end
                 end
             end
         end
@@ -514,9 +848,74 @@ defmodule <%= @app_module %>.Router do
         other_id = conn["path_params"]["id"]
         uid = auth["userId"]
         {conn, msgs} = D1.query(conn, "DB",
-          "SELECT * FROM messages WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) ORDER BY created_at ASC LIMIT 100",
+          "SELECT id, from_id, to_id, content, media_url, message_type, read, created_at FROM messages WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) ORDER BY id DESC LIMIT 50",
           [uid, other_id, other_id, uid])
-        Conn.json(conn, 200, %{"messages" => msgs || []})
+
+        # Check typing indicator via KV (auto-expires after 5s TTL)
+        {conn, typing_val} = KV.get(conn, "LOCATIONS", "typing:" <> other_id <> ":" <> uid)
+        is_typing = typing_val != nil
+
+        # Reverse to get ASC order (we fetched DESC for LIMIT efficiency)
+        reversed = reverse_list(msgs || [])
+        Conn.json(conn, 200, %{"messages" => reversed, "typing" => is_typing})
+    end
+  end
+
+  defp api_conversation_newer(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        other_id = conn["path_params"]["id"]
+        uid = auth["userId"]
+        qs = conn["query_string"] || ""
+        after_id = get_query_param(qs, "after")
+
+        case after_id do
+          nil -> Conn.json(conn, 400, %{"error" => "after param required"})
+          _ ->
+            {conn, msgs} = D1.query(conn, "DB",
+              "SELECT id, from_id, to_id, content, media_url, message_type, read, created_at FROM messages WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) AND id > ? ORDER BY id ASC LIMIT 50",
+              [uid, other_id, other_id, uid, after_id])
+
+            # Check typing via KV (auto-expires after 5s TTL)
+            {conn, typing_val} = KV.get(conn, "LOCATIONS", "typing:" <> other_id <> ":" <> uid)
+
+            Conn.json(conn, 200, %{"messages" => msgs || [], "typing" => typing_val != nil})
+        end
+    end
+  end
+
+  defp api_conversation_older(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        other_id = conn["path_params"]["id"]
+        uid = auth["userId"]
+        qs = conn["query_string"] || ""
+        before_id = get_query_param(qs, "before")
+
+        case before_id do
+          nil -> Conn.json(conn, 400, %{"error" => "before param required"})
+          _ ->
+            {conn, msgs} = D1.query(conn, "DB",
+              "SELECT id, from_id, to_id, content, media_url, message_type, read, created_at FROM messages WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) AND id < ? ORDER BY id DESC LIMIT 30",
+              [uid, other_id, other_id, uid, before_id])
+
+            reversed = reverse_list(msgs || [])
+            Conn.json(conn, 200, %{"messages" => reversed})
+        end
+    end
+  end
+
+  defp api_typing(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        other_id = conn["path_params"]["id"]
+        uid = auth["userId"]
+        conn = KV.put(conn, "LOCATIONS", "typing:" <> uid <> ":" <> other_id, "1",
+          %{"expiration_ttl" => 5})
+        Conn.json(conn, 200, %{"ok" => true})
     end
   end
 
@@ -562,18 +961,39 @@ defmodule <%= @app_module %>.Router do
     end
   end
 
+  defp tier_to_amount("starter"), do: 50
+  defp tier_to_amount("popular"), do: 150
+  defp tier_to_amount("whale"), do: 500
+  defp tier_to_amount(_), do: 0
+
   defp api_tokens_purchase(conn) do
     case require_auth_api(conn) do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         body = conn["parsed_body"] || %{}
-        amount = body["amount"] || 100
-        amount = if is_integer(amount) and amount > 0 and amount <= 10000, do: amount, else: 100
+        tier = body["tier"] || ""
+        amount = tier_to_amount(tier)
 
-        conn = D1.exec(conn, "DB",
-          "UPDATE tokens SET balance = balance + ?, lifetime_earned = lifetime_earned + ? WHERE user_id = ?",
-          [amount, amount, auth["userId"]])
-        Conn.json(conn, 200, %{"ok" => true, "added" => amount})
+        if amount == 0 do
+          Conn.json(conn, 400, %{"error" => "invalid_tier", "valid" => ["starter", "popular", "whale"]})
+        else
+          uid = auth["userId"]
+          {conn, tokens} = D1.query_one(conn, "DB",
+            "SELECT balance FROM tokens WHERE user_id = ?", [uid])
+          current = case tokens do
+            nil -> 0
+            t -> t["balance"] || 0
+          end
+          new_balance = current + amount
+
+          conn = D1.batch(conn, "DB", [
+            %{"sql" => "UPDATE tokens SET balance = balance + ?, lifetime_earned = lifetime_earned + ? WHERE user_id = ?",
+              "params" => [amount, amount, uid]},
+            %{"sql" => "INSERT INTO token_transactions (user_id, type, amount, tier, balance_after) VALUES (?, 'purchase', ?, ?, ?)",
+              "params" => [uid, amount, tier, new_balance]}
+          ])
+          Conn.json(conn, 200, %{"ok" => true, "added" => amount, "balance" => new_balance, "tier" => tier})
+        end
     end
   end
 
@@ -587,20 +1007,39 @@ defmodule <%= @app_module %>.Router do
 
         case tokens do
           nil ->
-            conn = D1.exec(conn, "DB",
-              "INSERT INTO tokens (user_id, balance, lifetime_earned, daily_free_remaining) VALUES (?, 50, 50, 20)", [uid])
+            conn = D1.batch(conn, "DB", [
+              %{"sql" => "INSERT INTO tokens (user_id, balance, lifetime_earned, daily_free_remaining, daily_reset_at) VALUES (?, 50, 50, 0, datetime('now', '+1 day'))",
+                "params" => [uid]},
+              %{"sql" => "INSERT INTO token_transactions (user_id, type, amount, tier, balance_after) VALUES (?, 'signup_bonus', 50, '', 50)",
+                "params" => [uid]}
+            ])
             Conn.json(conn, 200, %{"ok" => true, "added" => 50, "balance" => 50})
           t ->
             daily_remaining = t["daily_free_remaining"] || 0
             reset_at = t["daily_reset_at"] || ""
+            now = conn["_state"]["_now"] || ""
+
+            # Check if reset time has passed (refill daily tokens)
+            {daily_remaining, conn} = if byte_size(reset_at) > 0 and byte_size(now) > 0 and now >= reset_at do
+              # Reset period has passed, refill
+              conn = D1.exec(conn, "DB",
+                "UPDATE tokens SET daily_free_remaining = 20, daily_reset_at = datetime('now', '+1 day') WHERE user_id = ?", [uid])
+              {20, conn}
+            else
+              {daily_remaining, conn}
+            end
 
             if daily_remaining > 0 do
               add_amount = min_val(daily_remaining, 20)
-              conn = D1.exec(conn, "DB",
-                "UPDATE tokens SET balance = balance + ?, lifetime_earned = lifetime_earned + ?, daily_free_remaining = daily_free_remaining - ? WHERE user_id = ?",
-                [add_amount, add_amount, add_amount, uid])
-              new_balance = (t["balance"] || 0) + add_amount
-              Conn.json(conn, 200, %{"ok" => true, "added" => add_amount, "balance" => new_balance})
+              current_balance = t["balance"] || 0
+              new_balance = current_balance + add_amount
+              conn = D1.batch(conn, "DB", [
+                %{"sql" => "UPDATE tokens SET balance = balance + ?, lifetime_earned = lifetime_earned + ?, daily_free_remaining = daily_free_remaining - ?, daily_reset_at = datetime('now', '+1 day') WHERE user_id = ?",
+                  "params" => [add_amount, add_amount, add_amount, uid]},
+                %{"sql" => "INSERT INTO token_transactions (user_id, type, amount, tier, balance_after) VALUES (?, 'daily_claim', ?, '', ?)",
+                  "params" => [uid, add_amount, new_balance]}
+              ])
+              Conn.json(conn, 200, %{"ok" => true, "added" => add_amount, "balance" => new_balance, "next_reset" => reset_at})
             else
               Conn.json(conn, 409, %{"error" => "already_claimed", "next_reset" => reset_at})
             end
@@ -610,6 +1049,52 @@ defmodule <%= @app_module %>.Router do
 
   defp min_val(a, b) when a < b, do: a
   defp min_val(_, b), do: b
+
+  defp api_tokens_history(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        uid = auth["userId"]
+        {conn, txns} = D1.query(conn, "DB",
+          "SELECT id, type, amount, tier, balance_after, created_at FROM token_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+          [uid])
+        Conn.json(conn, 200, %{"transactions" => txns || []})
+    end
+  end
+
+  # --- Haversine distance in km ---
+
+  defp haversine_km(lat1, lng1, lat2, lng2) do
+    r = 6371.0
+    dlat = deg_to_rad(lat2 - lat1)
+    dlng = deg_to_rad(lng2 - lng1)
+    a = :math.sin(dlat / 2.0) * :math.sin(dlat / 2.0) +
+        :math.cos(deg_to_rad(lat1)) * :math.cos(deg_to_rad(lat2)) *
+        :math.sin(dlng / 2.0) * :math.sin(dlng / 2.0)
+    c = 2.0 * :math.atan2(:math.sqrt(a), :math.sqrt(1.0 - a))
+    r * c
+  end
+
+  defp deg_to_rad(deg) when is_number(deg), do: deg * 3.141592653589793 / 180.0
+  defp deg_to_rad(_), do: 0.0
+
+  defp reverse_list(list), do: reverse_list(list, [])
+  defp reverse_list([], acc), do: acc
+  defp reverse_list([h | t], acc), do: reverse_list(t, [h | acc])
+
+  defp get_query_param(qs, key) do
+    # Parse key=value from query string
+    target = key <> "="
+    case :binary.match(qs, target) do
+      :nomatch -> nil
+      {pos, len} ->
+        rest = :binary.part(qs, pos + len, byte_size(qs) - pos - len)
+        case :binary.match(rest, "&") do
+          :nomatch -> rest
+          {amp_pos, _} -> :binary.part(rest, 0, amp_pos)
+        end
+    end
+  end
 
   # --- Moderation APIs ---
 
@@ -652,10 +1137,14 @@ defmodule <%= @app_module %>.Router do
           nil -> Conn.json(conn, 400, %{"error" => "user_id required"})
           _ ->
             uid = auth["userId"]
-            conn = D1.exec(conn, "DB",
-              "INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)",
-              [uid, blocked_id])
-            Conn.json(conn, 200, %{"ok" => true})
+            if uid == blocked_id do
+              Conn.json(conn, 400, %{"error" => "cannot block yourself"})
+            else
+              conn = D1.exec(conn, "DB",
+                "INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)",
+                [uid, blocked_id])
+              Conn.json(conn, 200, %{"ok" => true})
+            end
         end
     end
   end
@@ -710,27 +1199,46 @@ defmodule <%= @app_module %>.Router do
   # --- Anti-spam ---
 
   defp api_spam_check(conn) do
-    body = conn["parsed_body"] || %{}
-    honeypot = body["honeypot"] || ""
-    timing = body["timing_ms"]
-    mouse = body["mouse_entropy"]
-    scroll = body["scroll_depth"]
-    focus = body["form_focus_count"]
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, _auth} ->
+        body = conn["parsed_body"] || %{}
+        honeypot = body["honeypot"] || ""
+        timing = body["timing_ms"]
+        mouse = body["mouse_entropy"]
+        scroll = body["scroll_depth"]
+        focus = body["form_focus_count"]
 
-    score = 1.0
-    score = if byte_size(honeypot) > 0, do: 0.0, else: score
-    score = if is_number(timing) and timing < 1000, do: score * 0.3, else: score
-    score = if is_number(mouse) and mouse == 0, do: score * 0.5, else: score
-    score = if is_number(scroll) and scroll == 0, do: score * 0.7, else: score
-    score = if is_number(focus) and focus == 0, do: score * 0.6, else: score
+        score = 1.0
+        score = if byte_size(honeypot) > 0, do: 0.0, else: score
+        score = if is_number(timing) and timing < 1000, do: score * 0.3, else: score
+        score = if is_number(mouse) and mouse == 0, do: score * 0.5, else: score
+        score = if is_number(scroll) and scroll == 0, do: score * 0.7, else: score
+        score = if is_number(focus) and focus == 0, do: score * 0.6, else: score
 
-    Conn.json(conn, 200, %{"human" => score > 0.4, "score" => score})
+        Conn.json(conn, 200, %{"human" => score > 0.4, "score" => score})
+    end
+  end
+
+  # --- Public stats (no auth required) ---
+
+  defp api_public_stats(conn) do
+    {conn, user_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM user", [])
+    {conn, msg_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM messages", [])
+    {conn, token_stats} = D1.query_one(conn, "DB",
+      "SELECT SUM(lifetime_earned) as issued FROM tokens", [])
+
+    Conn.json(conn, 200, %{
+      "users" => (user_count || %{})["count"] || 0,
+      "messages" => (msg_count || %{})["count"] || 0,
+      "tokens_issued" => (token_stats || %{})["issued"] || 0
+    })
   end
 
   # --- Admin ---
 
   defp api_admin_stats(conn) do
-    case require_auth_api(conn) do
+    case require_admin(conn) do
       {:error, conn} -> conn
       {:ok, conn, _auth} ->
         {conn, user_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM user", [])

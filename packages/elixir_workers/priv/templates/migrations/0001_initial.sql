@@ -1,5 +1,12 @@
--- Dark Phoenix — D1 Schema (Enhanced)
--- Run: wrangler d1 execute phoenix-db --local --file=schema.sql
+-- Migration 0001: Initial schema
+-- Run: wrangler d1 execute phoenix-db --local --file=migrations/0001_initial.sql
+
+-- Migration tracking table
+CREATE TABLE IF NOT EXISTS _migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT DEFAULT (datetime('now'))
+);
 
 -- Better Auth tables
 
@@ -60,7 +67,6 @@ CREATE TABLE IF NOT EXISTS profiles (
   looking_for TEXT DEFAULT '',
   body_type TEXT DEFAULT '',
   position TEXT DEFAULT '',
-  tribe TEXT DEFAULT '',
   is_verified INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -70,8 +76,6 @@ CREATE TABLE IF NOT EXISTS messages (
   from_id TEXT NOT NULL REFERENCES user(id),
   to_id TEXT NOT NULL REFERENCES user(id),
   content TEXT NOT NULL,
-  media_url TEXT DEFAULT '',
-  message_type TEXT DEFAULT 'text',
   read INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -80,7 +84,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_id, read, created_at D
 CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(from_id, to_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(to_id, from_id, read) WHERE read = 0;
-CREATE INDEX IF NOT EXISTS idx_messages_cursor ON messages(from_id, to_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS tokens (
   user_id TEXT PRIMARY KEY REFERENCES user(id),
@@ -89,20 +92,6 @@ CREATE TABLE IF NOT EXISTS tokens (
   daily_free_remaining INTEGER DEFAULT 20,
   daily_reset_at TEXT DEFAULT (datetime('now'))
 );
-
--- Token transaction ledger
-
-CREATE TABLE IF NOT EXISTS token_transactions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id TEXT NOT NULL REFERENCES user(id),
-  type TEXT NOT NULL,
-  amount INTEGER NOT NULL,
-  tier TEXT DEFAULT '',
-  balance_after INTEGER NOT NULL,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_token_txns_user ON token_transactions(user_id, created_at DESC);
 
 -- Moderation tables
 
@@ -129,15 +118,6 @@ CREATE TABLE IF NOT EXISTS blocks (
 CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id);
 CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id);
 
--- Typing indicators (transient)
-
-CREATE TABLE IF NOT EXISTS typing_indicators (
-  user_id TEXT NOT NULL REFERENCES user(id),
-  conversation_with TEXT NOT NULL REFERENCES user(id),
-  updated_at TEXT DEFAULT (datetime('now')),
-  PRIMARY KEY (user_id, conversation_with)
-);
-
 -- Anti-spam tables
 
 CREATE TABLE IF NOT EXISTS rate_limits (
@@ -158,3 +138,6 @@ CREATE TABLE IF NOT EXISTS spam_scores (
   ban_expires_at TEXT,
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Record this migration
+INSERT OR IGNORE INTO _migrations (version, name) VALUES (1, '0001_initial');

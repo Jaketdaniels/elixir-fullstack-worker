@@ -8,7 +8,10 @@ defmodule <%= @app_module %>.Views do
   def spa_shell(auth, initial_route) do
     auth_json = case auth do
       nil -> "null"
-      a -> ElixirWorkers.JSON.encode(a)
+      a ->
+        # Escape </script> to prevent XSS via user-controlled fields (name, email)
+        json = ElixirWorkers.JSON.encode(a)
+        escape_script_tag(json)
     end
 
     nav = case auth do
@@ -30,7 +33,7 @@ defmodule <%= @app_module %>.Views do
       "</head><body>",
       nav,
       "<div id=\"app\"></div>",
-      "<div id=\"toast\" class=\"dp-toast\" style=\"display:none\"></div>",
+      "<div id=\"toast\" class=\"dp-toast\" role=\"alert\" aria-live=\"polite\" style=\"display:none\"></div>",
       "<script>",
       "window.__AUTH__=", auth_json, ";",
       "window.__ROUTE__=\"", initial_route, "\";",
@@ -41,6 +44,7 @@ defmodule <%= @app_module %>.Views do
   end
 
   defp nav_html do
+    # Top nav bar (desktop links hidden on mobile via CSS)
     "<nav class=\"dp-nav\" id=\"main-nav\"><div class=\"dp-nav-inner\">" <>
     "<a href=\"/app\" class=\"dp-logo\" data-nav>Dark Phoenix</a>" <>
     "<div class=\"dp-nav-links\">" <>
@@ -51,58 +55,162 @@ defmodule <%= @app_module %>.Views do
     "<a href=\"/settings\" data-nav data-route=\"settings\" class=\"dp-nav-icon\">" <>
     "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" width=\"18\" height=\"18\"><path d=\"M12 15a3 3 0 100-6 3 3 0 000 6z\"/><path d=\"M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z\"/></svg>" <>
     "</a>" <>
-    "</div></div>" <>
-    "<div class=\"dp-bottom-nav\" aria-label=\"Primary\">" <>
+    "</div></div></nav>" <>
+    # Bottom nav is OUTSIDE <nav> to avoid backdrop-filter creating a containing block
+    # which breaks position:fixed on mobile
+    "<div class=\"dp-bottom-nav\" aria-label=\"Primary\" role=\"navigation\">" <>
     "<a href=\"/app\" data-nav data-route=\"map\" class=\"dp-bottom-item\">Map</a>" <>
     "<a href=\"/messages\" data-nav data-route=\"messages\" class=\"dp-bottom-item\">Messages<span class=\"dp-msg-badge\" data-msg-badge></span></a>" <>
     "<a href=\"/profile\" data-nav data-route=\"profile\" class=\"dp-bottom-item\">Profile</a>" <>
     "<a href=\"/tokens\" data-nav data-route=\"tokens\" class=\"dp-bottom-item\">Tokens</a>" <>
     "<a href=\"/settings\" data-nav data-route=\"settings\" class=\"dp-bottom-item\">Settings</a>" <>
-    "</div></nav>"
+    "</div>"
   end
 
   # --- Fragment: Landing ---
 
   def frag_landing do
     :erlang.iolist_to_binary([
+      # Hero
       "<div class=\"dp-hero\">",
         "<div class=\"dp-embers\" id=\"embers\"></div>",
         "<div class=\"dp-hero-content\">",
-          "<h1 class=\"dp-hero-title\">Connect in <span class=\"dp-fire\">realtime</span></h1>",
-          "<p class=\"dp-hero-sub\">Live location sharing. Nearby discovery. Messaging. All running on Elixir at the edge.</p>",
-          "<div class=\"dp-hero-cta\">",
-            "<a href=\"/signup\" class=\"dp-btn dp-btn-fire\" data-nav>Get started</a>",
+          "<h1 class=\"dp-hero-title dp-hero-anim\" style=\"--dp-stagger:200ms\">Find your people. <span class=\"dp-fire\">Right now.</span></h1>",
+          "<p class=\"dp-hero-sub dp-hero-anim\" style=\"--dp-stagger:320ms\">The realtime map for men who know what they want. See who&rsquo;s nearby, message instantly, meet up tonight.</p>",
+          "<div class=\"dp-hero-cta dp-hero-anim\" style=\"--dp-stagger:450ms\">",
+            "<a href=\"/signup\" class=\"dp-btn dp-btn-fire dp-btn-lg\" data-nav data-age-gate>Get started</a>",
             "<a href=\"/login\" class=\"dp-btn dp-btn-ghost\" data-nav>Sign in</a>",
+          "</div>",
+          "<div class=\"dp-hero-proof dp-hero-anim\" style=\"--dp-stagger:580ms\" id=\"hero-stats\" data-stats-src=\"/api/stats\">",
+            "<div class=\"dp-proof-item\"><span class=\"dp-proof-num\" data-stat-key=\"users\">0</span><span class=\"dp-proof-label\">active users</span></div>",
+            "<div class=\"dp-proof-sep\"></div>",
+            "<div class=\"dp-proof-item\"><span class=\"dp-proof-num\" data-stat-key=\"messages\">0</span><span class=\"dp-proof-label\">messages sent</span></div>",
+            "<div class=\"dp-proof-sep\"></div>",
+            "<div class=\"dp-proof-item\"><span class=\"dp-proof-num\" data-stat-key=\"tokens_issued\">0</span><span class=\"dp-proof-label\">tokens earned</span></div>",
           "</div>",
         "</div>",
       "</div>",
 
-      "<section class=\"dp-features\">",
+      # How it works
+      "<section class=\"dp-section dp-how\" id=\"how\">",
         "<div class=\"dp-container\">",
-          "<div class=\"dp-grid-3\">",
-            feature_card("Live Map", "See who's nearby in realtime. Share your location, discover connections on an interactive map.", "M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"),
-            feature_card("Messaging", "Direct messages powered by a token economy. Every message costs 1 token.", "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"),
-            feature_card("Privacy First", "Locations expire after 5 minutes. You control what's shared.", "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"),
+          "<h2 class=\"dp-section-title dp-scroll-reveal\">How it works</h2>",
+          "<div class=\"dp-steps\">",
+            landing_step("1", "Drop your pin", "Share your location with one tap. See who&rsquo;s nearby on a live map."),
+            "<div class=\"dp-step-line dp-scroll-reveal\"></div>",
+            landing_step("2", "Say hey", "Send a message. Each costs 1 token to keep things real and spam-free."),
+            "<div class=\"dp-step-line dp-scroll-reveal\"></div>",
+            landing_step("3", "Meet up", "Connect in person. Locations auto-expire in 5 minutes for your safety."),
           "</div>",
         "</div>",
       "</section>",
 
-      "<footer class=\"dp-footer\">",
+      # Safety
+      "<section class=\"dp-section dp-safety\" id=\"safety\">",
         "<div class=\"dp-container\">",
-          "<p class=\"dp-muted\">Dark Phoenix &mdash; Elixir on Cloudflare Workers</p>",
+          "<h2 class=\"dp-section-title dp-scroll-reveal\">Built for your safety</h2>",
+          "<div class=\"dp-grid-2\">",
+            safety_card("Auto-expiring locations", "Your pin disappears after 5 minutes. No permanent tracking, ever.", "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"),
+            safety_card("Block &amp; report", "Instant blocking removes someone from your map and inbox. Moderators review every report.", "M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636m12.728 12.728A9 9 0 015.636 5.636"),
+            safety_card("Token-gated messaging", "No spam. Every message costs a token, so every message is intentional.", "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"),
+            safety_card("Your data, your rules", "Location sharing is always optional. Delete your account and all data anytime.", "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"),
+          "</div>",
+        "</div>",
+      "</section>",
+
+      # Token economy
+      "<section class=\"dp-section dp-token-explain\" id=\"tokens\">",
+        "<div class=\"dp-container\">",
+          "<div class=\"dp-token-split\">",
+            "<div class=\"dp-token-copy dp-scroll-reveal\">",
+              "<h2 class=\"dp-section-title\" style=\"text-align:left\">Messages that matter</h2>",
+              "<p>Every message costs 1 token. This simple mechanic eliminates spam and means every conversation starts with intent.</p>",
+              "<ul class=\"dp-token-perks\">",
+                "<li><strong>50 free tokens</strong> when you sign up</li>",
+                "<li><strong>20 daily tokens</strong> replenished every day</li>",
+                "<li>Buy more anytime if you need them</li>",
+              "</ul>",
+              "<a href=\"/signup\" class=\"dp-btn dp-btn-fire\" data-nav data-age-gate>Start with 50 free tokens</a>",
+            "</div>",
+            "<div class=\"dp-token-visual dp-scroll-reveal\">",
+              "<div class=\"dp-token-stack\">",
+                "<div class=\"dp-token-coin dp-token-coin-1\"></div>",
+                "<div class=\"dp-token-coin dp-token-coin-2\"></div>",
+                "<div class=\"dp-token-coin dp-token-coin-3\"></div>",
+                "<div class=\"dp-token-badge\">50 free</div>",
+              "</div>",
+            "</div>",
+          "</div>",
+        "</div>",
+      "</section>",
+
+      # Final CTA
+      "<section class=\"dp-section dp-final-cta\" id=\"join\">",
+        "<div class=\"dp-container\">",
+          "<div class=\"dp-cta-box dp-scroll-reveal\">",
+            "<h2>Ready to connect?</h2>",
+            "<p>Be part of something real. Get on the map tonight.</p>",
+            "<a href=\"/signup\" class=\"dp-btn dp-btn-fire dp-btn-lg\" data-nav data-age-gate>Create free account</a>",
+            "<p class=\"dp-cta-legal\">18+ only. By signing up you agree to our community guidelines.</p>",
+          "</div>",
+        "</div>",
+      "</section>",
+
+      # Footer
+      "<footer class=\"dp-footer-full\">",
+        "<div class=\"dp-container\">",
+          "<div class=\"dp-footer-grid\">",
+            "<div class=\"dp-footer-col\">",
+              "<p class=\"dp-footer-brand dp-fire\">Dark Phoenix</p>",
+              "<p class=\"dp-footer-tagline\">Where connections happen.</p>",
+            "</div>",
+            "<div class=\"dp-footer-col\">",
+              "<h4>Platform</h4>",
+              "<ul>",
+                "<li><a href=\"#how\">How it works</a></li>",
+                "<li><a href=\"#safety\">Safety</a></li>",
+                "<li><a href=\"#tokens\">Token pricing</a></li>",
+              "</ul>",
+            "</div>",
+            "<div class=\"dp-footer-col\">",
+              "<h4>Legal</h4>",
+              "<ul>",
+                "<li><a href=\"#\">Terms of Service</a></li>",
+                "<li><a href=\"#\">Privacy Policy</a></li>",
+                "<li><a href=\"#\">Community Guidelines</a></li>",
+                "<li><a href=\"#\">Contact Support</a></li>",
+              "</ul>",
+            "</div>",
+          "</div>",
+          "<div class=\"dp-footer-bottom\">",
+            "<p class=\"dp-muted\">&copy; 2026 Dark Phoenix. All rights reserved.</p>",
+            "<span class=\"dp-age-badge\">18+</span>",
+          "</div>",
         "</div>",
       "</footer>"
     ])
   end
 
-  defp feature_card(title, desc, icon_path) do
+  defp landing_step(num, title, desc) do
     :erlang.iolist_to_binary([
-      "<div class=\"dp-card\">",
+      "<div class=\"dp-step dp-scroll-reveal\">",
+        "<div class=\"dp-step-num\">", num, "</div>",
+        "<div class=\"dp-step-body\">",
+          "<h3>", title, "</h3>",
+          "<p>", desc, "</p>",
+        "</div>",
+      "</div>"
+    ])
+  end
+
+  defp safety_card(title, desc, icon_path) do
+    :erlang.iolist_to_binary([
+      "<div class=\"dp-card dp-scroll-reveal\">",
         "<div class=\"dp-card-icon\">",
           "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"32\" height=\"32\"><path d=\"", icon_path, "\"/></svg>",
         "</div>",
-        "<h3>", HTML.escape(title), "</h3>",
-        "<p>", HTML.escape(desc), "</p>",
+        "<h3>", title, "</h3>",
+        "<p>", desc, "</p>",
       "</div>"
     ])
   end
@@ -115,16 +223,30 @@ defmodule <%= @app_module %>.Views do
         "<div class=\"dp-auth-card\">",
           "<p class=\"dp-auth-brand dp-fire\">Dark Phoenix</p>",
           "<h1>Sign in</h1>",
-          "<form id=\"login-form\" class=\"dp-form\">",
+          "<form id=\"login-form\" class=\"dp-form\" novalidate>",
             "<label class=\"dp-label\" for=\"login-email\">Email</label>",
-            "<input id=\"login-email\" type=\"email\" name=\"email\" placeholder=\"Email\" required class=\"dp-input\" autocomplete=\"email\"/>",
+            "<div class=\"dp-field\">",
+              "<input id=\"login-email\" type=\"email\" name=\"email\" placeholder=\"you@example.com\" required class=\"dp-input\" autocomplete=\"email\"/>",
+              "<span class=\"dp-field-error\" id=\"err-login-email\"></span>",
+            "</div>",
             "<label class=\"dp-label\" for=\"login-password\">Password</label>",
-            "<input id=\"login-password\" type=\"password\" name=\"password\" placeholder=\"Password\" required class=\"dp-input\" autocomplete=\"current-password\"/>",
+            "<div class=\"dp-field\">",
+              "<div class=\"dp-input-wrap\">",
+                "<input id=\"login-password\" type=\"password\" name=\"password\" placeholder=\"Password\" required class=\"dp-input\" autocomplete=\"current-password\"/>",
+                "<button type=\"button\" class=\"dp-pw-toggle\" data-toggle-pw=\"login-password\" aria-label=\"Show password\">",
+                  "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" width=\"18\" height=\"18\"><path d=\"M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/></svg>",
+                "</button>",
+              "</div>",
+              "<span class=\"dp-field-error\" id=\"err-login-password\"></span>",
+            "</div>",
             "<div style=\"position:absolute;left:-9999px\" aria-hidden=\"true\"><input type=\"text\" name=\"_hp\" tabindex=\"-1\" autocomplete=\"off\"/></div>",
             "<button type=\"submit\" class=\"dp-btn dp-btn-fire dp-btn-full\">Sign in</button>",
             "<div id=\"auth-error\" class=\"dp-error\" style=\"display:none\"></div>",
           "</form>",
-          "<p class=\"dp-auth-alt\">No account? <a href=\"/signup\" data-nav>Sign up</a></p>",
+          "<div class=\"dp-auth-links\">",
+            "<p class=\"dp-auth-alt\">No account? <a href=\"/signup\" data-nav>Sign up</a></p>",
+            "<p class=\"dp-auth-alt\"><a href=\"#\" id=\"forgot-pw-link\">Forgot your password?</a></p>",
+          "</div>",
         "</div>",
       "</div>"
     ])
@@ -138,16 +260,34 @@ defmodule <%= @app_module %>.Views do
         "<div class=\"dp-auth-card\">",
           "<p class=\"dp-auth-brand dp-fire\">Dark Phoenix</p>",
           "<h1>Create account</h1>",
-          "<form id=\"signup-form\" class=\"dp-form\">",
+          "<form id=\"signup-form\" class=\"dp-form\" novalidate>",
             "<label class=\"dp-label\" for=\"signup-name\">Display name</label>",
-            "<input id=\"signup-name\" type=\"text\" name=\"name\" placeholder=\"Display name\" required class=\"dp-input\" autocomplete=\"name\"/>",
+            "<div class=\"dp-field\">",
+              "<input id=\"signup-name\" type=\"text\" name=\"name\" placeholder=\"Display name\" required minlength=\"2\" class=\"dp-input\" autocomplete=\"name\"/>",
+              "<span class=\"dp-field-error\" id=\"err-signup-name\"></span>",
+            "</div>",
             "<label class=\"dp-label\" for=\"signup-email\">Email</label>",
-            "<input id=\"signup-email\" type=\"email\" name=\"email\" placeholder=\"Email\" required class=\"dp-input\" autocomplete=\"email\"/>",
+            "<div class=\"dp-field\">",
+              "<input id=\"signup-email\" type=\"email\" name=\"email\" placeholder=\"you@example.com\" required class=\"dp-input\" autocomplete=\"email\"/>",
+              "<span class=\"dp-field-error\" id=\"err-signup-email\"></span>",
+            "</div>",
             "<label class=\"dp-label\" for=\"signup-password\">Password</label>",
-            "<input id=\"signup-password\" type=\"password\" name=\"password\" placeholder=\"Password\" required minlength=\"8\" class=\"dp-input\" autocomplete=\"new-password\"/>",
-            "<p class=\"dp-muted\">Minimum 8 characters</p>",
+            "<div class=\"dp-field\">",
+              "<div class=\"dp-input-wrap\">",
+                "<input id=\"signup-password\" type=\"password\" name=\"password\" placeholder=\"Minimum 8 characters\" required minlength=\"8\" class=\"dp-input\" autocomplete=\"new-password\"/>",
+                "<button type=\"button\" class=\"dp-pw-toggle\" data-toggle-pw=\"signup-password\" aria-label=\"Show password\">",
+                  "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" width=\"18\" height=\"18\"><path d=\"M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/></svg>",
+                "</button>",
+              "</div>",
+              "<div class=\"dp-pw-strength\" id=\"pw-strength\"><div class=\"dp-pw-strength-bar\"></div></div>",
+              "<span class=\"dp-field-error\" id=\"err-signup-password\"></span>",
+            "</div>",
+            "<div class=\"dp-terms-group\">",
+              "<label class=\"dp-check\"><input type=\"checkbox\" id=\"terms-check\" name=\"terms\" required/><span class=\"dp-check-box\"></span><span>I agree to the <a href=\"#\" target=\"_blank\">Terms of Service</a> and <a href=\"#\" target=\"_blank\">Community Guidelines</a></span></label>",
+              "<label class=\"dp-check\"><input type=\"checkbox\" id=\"age-check\" name=\"age_confirm\" required/><span class=\"dp-check-box\"></span><span>I confirm I am 18 years of age or older</span></label>",
+            "</div>",
             "<div style=\"position:absolute;left:-9999px\" aria-hidden=\"true\"><input type=\"text\" name=\"_hp\" tabindex=\"-1\" autocomplete=\"off\"/></div>",
-            "<button type=\"submit\" class=\"dp-btn dp-btn-fire dp-btn-full\">Create account</button>",
+            "<button type=\"submit\" id=\"signup-submit\" class=\"dp-btn dp-btn-fire dp-btn-full\" disabled>Create account</button>",
             "<div id=\"auth-error\" class=\"dp-error\" style=\"display:none\"></div>",
           "</form>",
           "<p class=\"dp-auth-alt\">Have an account? <a href=\"/login\" data-nav>Sign in</a></p>",
@@ -165,6 +305,10 @@ defmodule <%= @app_module %>.Views do
         "<div class=\"dp-map-controls\">",
           "<button id=\"geo-toggle\" class=\"dp-map-btn\" title=\"Toggle location sharing\">",
             "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" width=\"20\" height=\"20\"><path d=\"M12 2a7 7 0 017 7c0 5.25-7 13-7 13S5 14.25 5 9a7 7 0 017-7z\"/><circle cx=\"12\" cy=\"9\" r=\"2.5\"/></svg>",
+          "</button>",
+          "<button id=\"filter-toggle\" class=\"dp-map-btn\" title=\"Filter users\">",
+            "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" width=\"20\" height=\"20\"><path d=\"M22 3H2l8 9.46V19l4 2v-8.54L22 3z\"/></svg>",
+            "<span id=\"filter-count\" class=\"dp-filter-count\" style=\"display:none\"></span>",
           "</button>",
           "<div id=\"geo-status\" class=\"dp-geo-status\"></div>",
         "</div>",
@@ -186,6 +330,7 @@ defmodule <%= @app_module %>.Views do
     looking = HTML.escape(profile["looking_for"] || "")
     bt = normalize_choice(profile["body_type"] || "")
     pos = normalize_choice(profile["position"] || "")
+    tr = normalize_choice(profile["tribe"] || "")
 
     completion_fields = [
       profile["display_name"],
@@ -194,11 +339,12 @@ defmodule <%= @app_module %>.Views do
       profile["age"],
       profile["position"],
       profile["body_type"],
-      profile["looking_for"]
+      profile["looking_for"],
+      profile["tribe"]
     ]
 
     completion_count = profile_completion_count(completion_fields, 0)
-    completion_pct = :erlang.integer_to_binary(div(completion_count * 100, 7))
+    completion_pct = :erlang.integer_to_binary(div(completion_count * 100, 8))
 
     position_choices =
       ensure_choice(
@@ -228,6 +374,24 @@ defmodule <%= @app_module %>.Views do
         bt
       )
 
+    tribe_choices =
+      ensure_choice(
+        [
+          {"", "Select tribe"},
+          {"bear", "Bear"},
+          {"twink", "Twink"},
+          {"jock", "Jock"},
+          {"otter", "Otter"},
+          {"daddy", "Daddy"},
+          {"wolf", "Wolf"},
+          {"cub", "Cub"},
+          {"geek", "Geek"},
+          {"rugged", "Rugged"},
+          {"not_saying", "Not saying"}
+        ],
+        tr
+      )
+
     :erlang.iolist_to_binary([
       "<div class=\"dp-container dp-page\">",
         "<h1>Your Profile</h1>",
@@ -250,8 +414,10 @@ defmodule <%= @app_module %>.Views do
             "<div><label class=\"dp-label\">Age</label><input type=\"number\" name=\"age\" value=\"", age, "\" class=\"dp-input\" min=\"18\" max=\"120\"/></div>",
             "<div><label class=\"dp-label\">Position</label><select name=\"position\" class=\"dp-input\">", select_options(position_choices, pos), "</select></div>",
           "</div>",
-          "<label class=\"dp-label\">Body type</label>",
-          "<select name=\"body_type\" class=\"dp-input\">", select_options(body_type_choices, bt), "</select>",
+          "<div class=\"dp-grid-2-sm\">",
+            "<div><label class=\"dp-label\">Body type</label><select name=\"body_type\" class=\"dp-input\">", select_options(body_type_choices, bt), "</select></div>",
+            "<div><label class=\"dp-label\">Tribe / Type</label><select name=\"tribe\" class=\"dp-input\">", select_options(tribe_choices, tr), "</select></div>",
+          "</div>",
           "<label class=\"dp-label\">Looking for</label>",
           "<textarea name=\"looking_for\" rows=\"2\" class=\"dp-input\" maxlength=\"200\" placeholder=\"Dates, chats, right now, friends...\">", looking, "</textarea>",
           "<button type=\"submit\" class=\"dp-btn dp-btn-fire\">Save</button>",
@@ -278,10 +444,13 @@ defmodule <%= @app_module %>.Views do
       av -> "<img src=\"" <> HTML.escape(av) <> "\" class=\"dp-profile-avatar\" alt=\"\"/>"
     end
 
+    tr_view = HTML.escape(choice_label(profile["tribe"] || ""))
+
     details = build_detail_list([
       {"Age", stringify(age || "")},
       {"Position", pos},
       {"Body type", bt},
+      {"Tribe", tr_view},
       {"Looking for", looking}
     ])
 
@@ -365,6 +534,14 @@ defmodule <%= @app_module %>.Views do
   defp choice_label("muscular"), do: "Muscular"
   defp choice_label("stocky"), do: "Stocky"
   defp choice_label("bear"), do: "Bear"
+  defp choice_label("twink"), do: "Twink"
+  defp choice_label("jock"), do: "Jock"
+  defp choice_label("otter"), do: "Otter"
+  defp choice_label("daddy"), do: "Daddy"
+  defp choice_label("wolf"), do: "Wolf"
+  defp choice_label("cub"), do: "Cub"
+  defp choice_label("geek"), do: "Geek"
+  defp choice_label("rugged"), do: "Rugged"
   defp choice_label("not_saying"), do: "Not saying"
   defp choice_label(val) when is_binary(val), do: val
   defp choice_label(_), do: ""
@@ -441,14 +618,10 @@ defmodule <%= @app_module %>.Views do
     other_id = HTML.escape(other_profile["user_id"] || "")
 
     msg_html = case messages do
-      [] -> "<p class=\"dp-muted dp-empty\">Start the conversation!</p>"
+      [] -> "<p class=\"dp-muted dp-empty\" id=\"empty-convo\">Start the conversation!</p>"
       _ ->
         items = map_iolist(messages, fn m ->
-          is_mine = m["from_id"] == auth["userId"]
-          cls = if is_mine, do: "dp-bubble dp-bubble-mine", else: "dp-bubble dp-bubble-theirs"
-          "<div class=\"" <> cls <> "\">" <>
-          "<p>" <> HTML.escape(m["content"] || "") <> "</p>" <>
-          "<small>" <> HTML.escape(m["created_at"] || "") <> "</small></div>"
+          render_bubble(m, auth)
         end)
         :erlang.iolist_to_binary(items)
     end
@@ -460,9 +633,26 @@ defmodule <%= @app_module %>.Views do
           "<h2>", other_name, "</h2>",
           "<a href=\"/profile/", other_id, "\" class=\"dp-convo-profile\" data-nav>View profile</a>",
         "</div>",
-        "<div id=\"messages\" class=\"dp-messages\" aria-live=\"polite\">", msg_html, "</div>",
+        "<div id=\"messages\" class=\"dp-messages\" aria-live=\"polite\">",
+          "<div id=\"scroll-sentinel-top\" class=\"dp-scroll-sentinel\"></div>",
+          "<div id=\"loading-older\" class=\"dp-loading-older\" style=\"display:none\"><div class=\"dp-spinner\"></div></div>",
+          msg_html,
+          "<div id=\"typing-indicator\" class=\"dp-typing-indicator\" style=\"display:none\">",
+            "<span class=\"dp-typing-dot\"></span>",
+            "<span class=\"dp-typing-dot\"></span>",
+            "<span class=\"dp-typing-dot\"></span>",
+          "</div>",
+        "</div>",
+        "<div id=\"media-preview-strip\" class=\"dp-media-preview-strip\" style=\"display:none\">",
+          "<img id=\"media-preview-img\" src=\"\" alt=\"preview\" class=\"dp-media-thumb\"/>",
+          "<button id=\"media-preview-remove\" type=\"button\" class=\"dp-media-remove\" aria-label=\"Remove image\">&times;</button>",
+        "</div>",
         "<p id=\"msg-meta\" class=\"dp-msg-meta\">Each message costs 1 token.</p>",
         "<form id=\"msg-form\" class=\"dp-msg-form\" data-other=\"", other_id, "\">",
+          "<button id=\"media-btn\" type=\"button\" class=\"dp-media-btn\" title=\"Share image\">",
+            "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" width=\"20\" height=\"20\"><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" ry=\"2\"/><circle cx=\"8.5\" cy=\"8.5\" r=\"1.5\"/><path d=\"M21 15l-5-5L5 21\"/></svg>",
+          "</button>",
+          "<input type=\"file\" id=\"media-input\" accept=\"image/*\" style=\"display:none\"/>",
           "<input type=\"text\" name=\"content\" placeholder=\"Type a message...\" class=\"dp-input dp-input-grow\" autocomplete=\"off\" maxlength=\"2000\"/>",
           "<div style=\"position:absolute;left:-9999px\" aria-hidden=\"true\"><input type=\"text\" name=\"_hp\" tabindex=\"-1\" autocomplete=\"off\"/></div>",
           "<button id=\"msg-send\" type=\"submit\" class=\"dp-btn dp-btn-fire\">Send</button>",
@@ -471,38 +661,123 @@ defmodule <%= @app_module %>.Views do
     ])
   end
 
+  defp render_bubble(m, auth) do
+    is_mine = m["from_id"] == auth["userId"]
+    cls = if is_mine, do: "dp-bubble dp-bubble-mine", else: "dp-bubble dp-bubble-theirs"
+    mid = HTML.escape(stringify(m["id"] || ""))
+    media = m["media_url"] || ""
+    msg_type = m["message_type"] || "text"
+    read_val = m["read"] || 0
+
+    media_el = if msg_type == "image" and byte_size(media) > 0 do
+      "<div class=\"dp-media-preview\"><img src=\"" <> HTML.escape(media) <> "\" alt=\"shared image\" loading=\"lazy\" class=\"dp-chat-image\"/></div>"
+    else
+      ""
+    end
+
+    receipt_el = if is_mine do
+      if read_val == 1 do
+        "<span class=\"dp-receipt dp-receipt-read\" title=\"Read\"><svg viewBox=\"0 0 16 11\" width=\"16\" height=\"11\"><path d=\"M1 5.5l3.5 3.5L11 2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M5.5 5.5L9 9 15.5 2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></span>"
+      else
+        "<span class=\"dp-receipt dp-receipt-sent\" title=\"Sent\"><svg viewBox=\"0 0 12 11\" width=\"12\" height=\"11\"><path d=\"M1 5.5l3.5 3.5L11 2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></span>"
+      end
+    else
+      ""
+    end
+
+    content = m["content"] || ""
+    content_el = if byte_size(content) > 0, do: "<p>" <> HTML.escape(content) <> "</p>", else: ""
+
+    "<div class=\"" <> cls <> "\" data-mid=\"" <> mid <> "\">" <>
+    media_el <>
+    content_el <>
+    "<small>" <> HTML.escape(m["created_at"] || "") <> receipt_el <> "</small></div>"
+  end
+
   # --- Fragment: Tokens ---
 
   def frag_tokens(_auth, tokens) do
     balance = tokens["balance"] || 0
     lifetime = tokens["lifetime_earned"] || 0
     daily = tokens["daily_free_remaining"] || 0
+    reset_at = HTML.escape(tokens["daily_reset_at"] || "")
 
     :erlang.iolist_to_binary([
       "<div class=\"dp-container dp-page\">",
         "<h1>Tokens</h1>",
-        "<div class=\"dp-token-stats\">",
-          token_stat("Balance", stringify(balance)),
-          token_stat("Lifetime earned", stringify(lifetime)),
-          token_stat("Daily free left", stringify(daily)),
-        "</div>",
-        "<div class=\"dp-token-actions\">",
-          "<h3>Get more tokens</h3>",
-          "<p class=\"dp-muted\">Each message costs 1 token. Free accounts get 20 tokens daily.</p>",
-          "<div class=\"dp-token-btns\">",
-            "<button id=\"claim-daily\" class=\"dp-btn dp-btn-ghost\">Claim daily tokens</button>",
-            "<button id=\"buy-tokens\" class=\"dp-btn dp-btn-fire\">Buy 100 tokens</button>",
+
+        # Balance hero
+        "<div class=\"dp-balance-hero\">",
+          "<div class=\"dp-balance-number\" id=\"token-balance\" data-value=\"", stringify(balance), "\">", stringify(balance), "</div>",
+          "<div class=\"dp-token-label\">token balance</div>",
+          "<div class=\"dp-balance-sub\">",
+            "<span>Lifetime earned: <strong>", stringify(lifetime), "</strong></span>",
           "</div>",
-          "<div id=\"token-msg\" class=\"dp-success\" style=\"display:none\"></div>",
+        "</div>",
+
+        # Daily claim
+        "<div class=\"dp-daily-section\">",
+          "<div class=\"dp-daily-row\">",
+            "<div>",
+              "<h3>Daily free tokens</h3>",
+              "<p class=\"dp-muted\">", stringify(daily), " tokens remaining today</p>",
+            "</div>",
+            "<div class=\"dp-daily-right\">",
+              "<div class=\"dp-countdown\" id=\"daily-countdown\" data-reset=\"", reset_at, "\"></div>",
+              "<button id=\"claim-daily\" class=\"dp-btn dp-btn-ghost dp-btn-sm\">Claim 20 tokens</button>",
+            "</div>",
+          "</div>",
+        "</div>",
+
+        # Pricing tiers
+        "<h2 class=\"dp-tier-heading\">Get more tokens</h2>",
+        "<p class=\"dp-muted dp-tier-sub\">Each message costs 1 token. Pick a pack.</p>",
+        "<div class=\"dp-tier-grid\" id=\"tier-grid\">",
+          tier_card("starter", "Spark", "50", "$2.99", "~$0.06/msg", ""),
+          tier_card("popular", "Blaze", "150", "$6.99", "~$0.05/msg", "Most popular"),
+          tier_card("whale", "Inferno", "500", "$14.99", "~$0.03/msg", "Best value"),
+        "</div>",
+        "<div class=\"dp-tier-action\">",
+          "<button id=\"buy-tokens\" class=\"dp-btn dp-btn-fire\" disabled>Select a tier</button>",
+        "</div>",
+
+        # Transaction history
+        "<div class=\"dp-txn-section\">",
+          "<div class=\"dp-txn-header\" id=\"txn-header\">",
+            "<h3>Transaction history</h3>",
+            "<svg viewBox=\"0 0 24 24\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M6 9l6 6 6-6\"/></svg>",
+          "</div>",
+          "<div class=\"dp-txn-body\" id=\"txn-body\"></div>",
         "</div>",
       "</div>"
     ])
   end
 
-  defp token_stat(label, value) do
-    "<div class=\"dp-token-stat\">" <>
-    "<div class=\"dp-token-val\">" <> HTML.escape(value) <> "</div>" <>
-    "<div class=\"dp-token-label\">" <> HTML.escape(label) <> "</div></div>"
+  defp tier_card(tier_id, name, tokens, price, rate, badge) do
+    badge_cls = case badge do
+      "Most popular" -> " dp-tier-badge-popular"
+      "Best value" -> " dp-tier-badge-best"
+      _ -> ""
+    end
+    badge_html = case badge do
+      "" -> ""
+      b -> "<div class=\"dp-tier-badge" <> badge_cls <> "\">" <> b <> "</div>"
+    end
+    popular_cls = case badge do
+      "Most popular" -> " dp-tier-popular"
+      "Best value" -> " dp-tier-best"
+      _ -> ""
+    end
+    :erlang.iolist_to_binary([
+      "<div class=\"dp-tier-card", popular_cls, "\" data-tier=\"", tier_id, "\">",
+        badge_html,
+        "<div class=\"dp-tier-name\">", name, "</div>",
+        "<div class=\"dp-tier-tokens\">", tokens, "</div>",
+        "<div class=\"dp-tier-tokens-label\">tokens</div>",
+        "<div class=\"dp-tier-price\">", price, "</div>",
+        "<div class=\"dp-tier-rate\">", rate, "</div>",
+      "</div>"
+    ])
   end
 
   # --- Fragment: Admin ---
@@ -593,4 +868,12 @@ defmodule <%= @app_module %>.Views do
   defp stringify(val) when is_integer(val), do: :erlang.integer_to_binary(val)
   defp stringify(val) when is_float(val), do: :erlang.float_to_binary(val, [{:decimals, 2}])
   defp stringify(_), do: ""
+
+  # Prevent XSS: replace </script> sequences in JSON injected into <script> tags
+  defp escape_script_tag(str), do: escape_script_tag(str, [])
+  defp escape_script_tag(<<>>, acc), do: :erlang.list_to_binary(:lists.reverse(acc))
+  defp escape_script_tag(<<"</", rest::binary>>, acc),
+    do: escape_script_tag(rest, [?/, ?\\, ?< | acc])
+  defp escape_script_tag(<<c, rest::binary>>, acc),
+    do: escape_script_tag(rest, [c | acc])
 end

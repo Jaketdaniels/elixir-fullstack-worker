@@ -288,9 +288,13 @@ function parseOutput(out) {
 
 // --- Env Extraction ---
 
+// Keys that must never be sent to WASM
+const ENV_BLACKLIST = new Set(["BETTER_AUTH_SECRET", "ADMIN_EMAILS"]);
+
 function extractEnvVars(workerEnv) {
   const vars = {};
   for (const key of Object.keys(workerEnv)) {
+    if (ENV_BLACKLIST.has(key)) continue;
     const val = workerEnv[key];
     if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
       vars[key] = String(val);
@@ -446,9 +450,20 @@ export default {
         return auth.handler(request);
       }
 
-      // Database migration endpoint
+      // Database migration endpoint (requires auth)
       if (url.pathname === "/migrate" && request.method === "POST") {
         try {
+          // Require authentication for migration
+          const migAuth = createAuth(workerEnv);
+          const migSession = await migAuth.api.getSession({ headers: request.headers });
+          if (!migSession) {
+            return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } });
+          }
+          // Check admin emails
+          const adminEmails = (workerEnv.ADMIN_EMAILS || "").split(",").map(e => e.trim().toLowerCase());
+          if (!adminEmails.includes((migSession.user?.email || "").toLowerCase())) {
+            return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: { "content-type": "application/json" } });
+          }
           const { getMigrations } = await import("better-auth/db");
           const migrationDb = new Kysely({ dialect: new D1Dialect({ database: workerEnv.DB }) });
           const authConfig = { database: { db: migrationDb, type: "sqlite" }, secret: workerEnv.BETTER_AUTH_SECRET || "dev-secret-change-me", emailAndPassword: { enabled: true } };
@@ -460,6 +475,73 @@ export default {
           return new Response(JSON.stringify({ message: "Migrations complete", created: toBeCreated.map(t => t.table), added: toBeAdded.map(t => t.table) }), { headers: { "content-type": "application/json" } });
         } catch (e) {
           return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "content-type": "application/json" } });
+        }
+      }
+
+      // Media upload endpoint (handled in JS for binary data)
+      if (url.pathname === "/api/media/upload" && request.method === "POST") {
+        // Check auth
+        let uploadAuth = null;
+        try {
+          const auth = createAuth(workerEnv);
+          const session = await auth.api.getSession({ headers: request.headers });
+          if (session?.user) uploadAuth = session.user;
+        } catch (e) { /* no session */ }
+
+        if (!uploadAuth) {
+          return new Response(JSON.stringify({ error: "unauthorized" }), {
+            status: 401, headers: { "content-type": "application/json" },
+          });
+        }
+
+        // Rate limit uploads
+        const uploadIp = request.headers.get("cf-connecting-ip") || "unknown";
+        const uploadRl = checkRateLimit("upload:" + uploadIp, 10, 60000);
+        if (!uploadRl.allowed) {
+          return new Response(JSON.stringify({ error: "rate_limited" }), {
+            status: 429, headers: { "content-type": "application/json" },
+          });
+        }
+
+        try {
+          const formData = await request.formData();
+          const file = formData.get("file");
+          if (!file || !(file instanceof File)) {
+            return new Response(JSON.stringify({ error: "no file provided" }), {
+              status: 400, headers: { "content-type": "application/json" },
+            });
+          }
+
+          // Validate MIME type
+          if (!file.type.startsWith("image/")) {
+            return new Response(JSON.stringify({ error: "only image files allowed" }), {
+              status: 400, headers: { "content-type": "application/json" },
+            });
+          }
+
+          // Validate size (500KB max)
+          if (file.size > 512000) {
+            return new Response(JSON.stringify({ error: "file too large, max 500KB" }), {
+              status: 400, headers: { "content-type": "application/json" },
+            });
+          }
+
+          const buf = await file.arrayBuffer();
+          const bytes = new Uint8Array(buf);
+          let binary = "";
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const b64 = btoa(binary);
+          const dataUri = "data:" + file.type + ";base64," + b64;
+
+          return new Response(JSON.stringify({ url: dataUri }), {
+            headers: { "content-type": "application/json" },
+          });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: "upload failed: " + e.message }), {
+            status: 500, headers: { "content-type": "application/json" },
+          });
         }
       }
 
@@ -537,6 +619,7 @@ export default {
           _fingerprint: fingerprint,
           _spam_score: spamScore,
           _now: new Date().toISOString(),
+          _admin_emails: workerEnv.ADMIN_EMAILS || "",
         },
       };
 

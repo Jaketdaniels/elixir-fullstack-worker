@@ -122,6 +122,23 @@ defmodule Mix.Tasks.ElixirWorkers.New do
       created("schema.sql")
     end
 
+    # Copy migrations directory
+    migrations_src = Path.join(templates_dir, "migrations")
+
+    if File.dir?(migrations_src) do
+      migrations_dst = Path.join(project_dir, "migrations")
+      File.mkdir_p!(migrations_dst)
+
+      migrations_src
+      |> File.ls!()
+      |> Enum.filter(&String.ends_with?(&1, ".sql"))
+      |> Enum.sort()
+      |> Enum.each(fn file ->
+        File.cp!(Path.join(migrations_src, file), Path.join(migrations_dst, file))
+        created("migrations/#{file}")
+      end)
+    end
+
     # Write .gitignore
     File.write!(Path.join(project_dir, ".gitignore"), gitignore_content())
     created(".gitignore")
@@ -179,6 +196,8 @@ defmodule Mix.Tasks.ElixirWorkers.New do
     *.ez
     .elixir_ls/
     .dev.vars
+    .wrangler/
+    .DS_Store
     """
   end
 end

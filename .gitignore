@@ -1,19 +1,45 @@
+# Build artifacts
 _build/
 build/
 worker/atomvm.wasm
 worker/app.avm
 worker/node_modules/
 worker/.wrangler/
+
+# Package build artifacts
 packages/*/_build/
 packages/*/deps/
 packages/elixir_workers/priv/.built
 packages/elixir_workers/priv/atomvm.wasm
 packages/elixir_workers/priv/stdlib/
-.DS_Store
+
+# Dependencies
+node_modules/
+
+# Secrets and environment
 .env
 .dev.vars
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.elixir_ls/
+.vscode/
+.idea/
+
+# Test/dev artifacts
 _screenshots/*
+.playwright-cli/
+
+# Vendored sources (submodules)
 vendor/
 atomvm-wasi/
+
+# Generated files
 openapi.json
-.playwright-cli/
+*.ez
+
+# Wrangler local state
+.wrangler/
