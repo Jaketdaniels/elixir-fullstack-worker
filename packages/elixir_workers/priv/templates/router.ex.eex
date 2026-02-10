@@ -42,6 +42,11 @@ defmodule <%= @app_module %>.Router do
       {"POST", ["api", "location"], &api_location_update/1},
       {"GET", ["api", "nearby"], &api_nearby/1},
 
+      # API — profile photos (must be before :id routes)
+      {"GET", ["api", "profile", "photos"], &api_profile_photos_list/1},
+      {"POST", ["api", "profile", "photos"], &api_profile_photos_add/1},
+      {"DELETE", ["api", "profile", "photos", ":id"], &api_profile_photos_delete/1},
+
       # API — profile
       {"GET", ["api", "profile", ":id"], &api_profile_get/1},
       {"PUT", ["api", "profile"], &api_profile_update/1},
@@ -264,7 +269,10 @@ defmodule <%= @app_module %>.Router do
       {:ok, conn, auth} ->
         {conn, profile} = D1.query_one(conn, "DB",
           "SELECT * FROM profiles WHERE user_id = ?", [auth["userId"]])
-        Conn.html(conn, 200, <%= @app_module %>.Views.frag_profile_edit(auth, profile || %{}))
+        {conn, photos} = D1.query(conn, "DB",
+          "SELECT id, url, position FROM profile_photos WHERE user_id = ? ORDER BY position ASC",
+          [auth["userId"]])
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_profile_edit(auth, profile || %{}, photos || []))
     end
   end
 
@@ -285,7 +293,10 @@ defmodule <%= @app_module %>.Router do
             "SELECT p.* FROM profiles p WHERE p.user_id = ?", [id])
           case profile do
             nil -> Conn.html(conn, 404, "<div class=\"dp-container dp-page dp-center\"><h1>404</h1><p class=\"dp-muted\">User not found</p></div>")
-            _ -> Conn.html(conn, 200, <%= @app_module %>.Views.frag_profile_view(auth, profile))
+            _ ->
+              {conn, photos} = D1.query(conn, "DB",
+                "SELECT id, url, position FROM profile_photos WHERE user_id = ? ORDER BY position ASC", [id])
+              Conn.html(conn, 200, <%= @app_module %>.Views.frag_profile_view(auth, profile, photos || []))
           end
         end
     end
@@ -732,7 +743,10 @@ defmodule <%= @app_module %>.Router do
             "SELECT user_id, display_name, bio, avatar_url, age, looking_for, body_type, position, tribe, is_verified, created_at FROM profiles WHERE user_id = ?", [id])
           case profile do
             nil -> Conn.json(conn, 404, %{"error" => "not_found"})
-            _ -> Conn.json(conn, 200, profile)
+            _ ->
+              {conn, photos} = D1.query(conn, "DB",
+                "SELECT id, url, position FROM profile_photos WHERE user_id = ? ORDER BY position ASC", [id])
+              Conn.json(conn, 200, put_map(profile, "photos", photos || []))
           end
         end
     end
@@ -766,6 +780,132 @@ defmodule <%= @app_module %>.Router do
             conn = D1.exec(conn, "DB",
               "INSERT INTO profiles (user_id, display_name, bio, avatar_url, age, looking_for, body_type, position, tribe) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name, bio = excluded.bio, avatar_url = excluded.avatar_url, age = excluded.age, looking_for = excluded.looking_for, body_type = excluded.body_type, position = excluded.position, tribe = excluded.tribe",
               [auth["userId"], display_name, bio, avatar_url, age, looking_for, body_type_val, position, tribe])
+            Conn.json(conn, 200, %{"ok" => true})
+        end
+    end
+  end
+
+  # --- Profile Photos API ---
+
+  defp api_profile_photos_list(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        uid = auth["userId"]
+        {conn, photos} = D1.query(conn, "DB",
+          "SELECT id, url, position, created_at FROM profile_photos WHERE user_id = ? ORDER BY position ASC",
+          [uid])
+        Conn.json(conn, 200, %{"photos" => photos || []})
+    end
+  end
+
+  defp api_profile_photos_add(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        body = conn["parsed_body"] || %{}
+        url = body["url"] || ""
+        uid = auth["userId"]
+
+        cond do
+          byte_size(url) == 0 ->
+            Conn.json(conn, 400, %{"error" => "url required"})
+          byte_size(url) > 5000 ->
+            Conn.json(conn, 400, %{"error" => "url too long"})
+          true ->
+            # Check current count (max 6)
+            {conn, count_row} = D1.query_one(conn, "DB",
+              "SELECT COUNT(*) as count FROM profile_photos WHERE user_id = ?", [uid])
+            count = (count_row || %{})["count"] || 0
+
+            if count >= 6 do
+              Conn.json(conn, 400, %{"error" => "maximum 6 photos"})
+            else
+              # Get next position
+              {conn, max_pos} = D1.query_one(conn, "DB",
+                "SELECT MAX(position) as max_pos FROM profile_photos WHERE user_id = ?", [uid])
+              next_pos = case max_pos do
+                nil -> 0
+                r -> (r["max_pos"] || -1) + 1
+              end
+
+              conn = D1.exec(conn, "DB",
+                "INSERT INTO profile_photos (user_id, url, position) VALUES (?, ?, ?)",
+                [uid, url, next_pos])
+
+              # If first photo, auto-set as avatar_url
+              if count == 0 do
+                conn = D1.exec(conn, "DB",
+                  "UPDATE profiles SET avatar_url = ? WHERE user_id = ?",
+                  [url, uid])
+                Conn.json(conn, 201, %{"ok" => true, "position" => next_pos, "avatar_set" => true})
+              else
+                Conn.json(conn, 201, %{"ok" => true, "position" => next_pos})
+              end
+            end
+        end
+    end
+  end
+
+  defp api_profile_photos_delete(conn) do
+    case require_auth_api(conn) do
+      {:error, conn} -> conn
+      {:ok, conn, auth} ->
+        photo_id = conn["path_params"]["id"]
+        uid = auth["userId"]
+
+        # Verify ownership and get photo info
+        {conn, photo} = D1.query_one(conn, "DB",
+          "SELECT id, url, position FROM profile_photos WHERE id = ? AND user_id = ?",
+          [photo_id, uid])
+
+        case photo do
+          nil ->
+            Conn.json(conn, 404, %{"error" => "photo not found"})
+          _ ->
+            deleted_pos = photo["position"] || 0
+            deleted_url = photo["url"] || ""
+
+            # Delete the photo
+            conn = D1.exec(conn, "DB",
+              "DELETE FROM profile_photos WHERE id = ? AND user_id = ?",
+              [photo_id, uid])
+
+            # Reorder remaining photos
+            conn = D1.exec(conn, "DB",
+              "UPDATE profile_photos SET position = position - 1 WHERE user_id = ? AND position > ?",
+              [uid, deleted_pos])
+
+            # If deleted photo was position 0 (primary), update avatar to new primary
+            conn = if deleted_pos == 0 do
+              {conn, new_primary} = D1.query_one(conn, "DB",
+                "SELECT url FROM profile_photos WHERE user_id = ? AND position = 0", [uid])
+              new_avatar = case new_primary do
+                nil -> ""
+                p -> p["url"] || ""
+              end
+              D1.exec(conn, "DB",
+                "UPDATE profiles SET avatar_url = ? WHERE user_id = ?",
+                [new_avatar, uid])
+            else
+              # Check if the deleted photo url was the avatar
+              {conn, profile} = D1.query_one(conn, "DB",
+                "SELECT avatar_url FROM profiles WHERE user_id = ?", [uid])
+              if profile != nil and profile["avatar_url"] == deleted_url do
+                {conn, first} = D1.query_one(conn, "DB",
+                  "SELECT url FROM profile_photos WHERE user_id = ? AND position = 0", [uid])
+                new_avatar = case first do
+                  nil -> ""
+                  p -> p["url"] || ""
+                end
+                D1.exec(conn, "DB",
+                  "UPDATE profiles SET avatar_url = ? WHERE user_id = ?",
+                  [new_avatar, uid])
+              else
+                conn
+              end
+            end
+
             Conn.json(conn, 200, %{"ok" => true})
         end
     end

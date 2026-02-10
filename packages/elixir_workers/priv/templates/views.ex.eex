@@ -312,6 +312,9 @@ defmodule <%= @app_module %>.Views do
           "</button>",
           "<div id=\"geo-status\" class=\"dp-geo-status\"></div>",
         "</div>",
+        "<button id=\"recenter-btn\" class=\"dp-recenter-btn\" title=\"Center on me\" aria-label=\"Center map on your location\">",
+          "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" width=\"20\" height=\"20\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M12 2v4m0 12v4M2 12h4m12 0h4\"/></svg>",
+        "</button>",
         "<section id=\"nearby-sheet\" class=\"dp-nearby-sheet\" aria-live=\"polite\">",
           "<div class=\"dp-nearby-head\"><h2>Nearby now</h2><span id=\"nearby-count\" class=\"dp-muted\">0</span></div>",
           "<div id=\"nearby-list\" class=\"dp-nearby-list\"><p class=\"dp-muted\">Share your location to discover people nearby.</p></div>",
@@ -322,7 +325,7 @@ defmodule <%= @app_module %>.Views do
 
   # --- Fragment: Profile Edit ---
 
-  def frag_profile_edit(_auth, profile) do
+  def frag_profile_edit(_auth, profile, photos \\ []) do
     dn = HTML.escape(profile["display_name"] || "")
     bio = HTML.escape(profile["bio"] || "")
     avatar = HTML.escape(profile["avatar_url"] || "")
@@ -346,51 +349,27 @@ defmodule <%= @app_module %>.Views do
     completion_count = profile_completion_count(completion_fields, 0)
     completion_pct = :erlang.integer_to_binary(div(completion_count * 100, 8))
 
-    position_choices =
-      ensure_choice(
-        [
-          {"", "Select position"},
-          {"top", "Top"},
-          {"bottom", "Bottom"},
-          {"vers", "Vers"},
-          {"side", "Side"},
-          {"not_saying", "Not saying"}
-        ],
-        pos
-      )
 
-    body_type_choices =
-      ensure_choice(
-        [
-          {"", "Select body type"},
-          {"slim", "Slim"},
-          {"athletic", "Athletic"},
-          {"average", "Average"},
-          {"muscular", "Muscular"},
-          {"stocky", "Stocky"},
-          {"bear", "Bear"},
-          {"not_saying", "Not saying"}
-        ],
-        bt
-      )
+    photo_slots = render_photo_slots(photos)
+    bio_len = :erlang.integer_to_binary(byte_size(profile["bio"] || ""))
 
-    tribe_choices =
-      ensure_choice(
-        [
-          {"", "Select tribe"},
-          {"bear", "Bear"},
-          {"twink", "Twink"},
-          {"jock", "Jock"},
-          {"otter", "Otter"},
-          {"daddy", "Daddy"},
-          {"wolf", "Wolf"},
-          {"cub", "Cub"},
-          {"geek", "Geek"},
-          {"rugged", "Rugged"},
-          {"not_saying", "Not saying"}
-        ],
-        tr
-      )
+    position_pills = render_pills("position", [
+      {"top", "Top"}, {"bottom", "Bottom"}, {"vers", "Vers"},
+      {"side", "Side"}, {"not_saying", "Not saying"}
+    ], pos)
+
+    body_type_pills = render_pills("body_type", [
+      {"slim", "Slim"}, {"athletic", "Athletic"}, {"average", "Average"},
+      {"muscular", "Muscular"}, {"stocky", "Stocky"}, {"bear", "Bear"},
+      {"not_saying", "Not saying"}
+    ], bt)
+
+    tribe_pills = render_pills("tribe", [
+      {"bear", "Bear"}, {"twink", "Twink"}, {"jock", "Jock"},
+      {"otter", "Otter"}, {"daddy", "Daddy"}, {"wolf", "Wolf"},
+      {"cub", "Cub"}, {"geek", "Geek"}, {"rugged", "Rugged"},
+      {"not_saying", "Not saying"}
+    ], tr)
 
     :erlang.iolist_to_binary([
       "<div class=\"dp-container dp-page\">",
@@ -403,24 +382,63 @@ defmodule <%= @app_module %>.Views do
             completion_pct,
             "%\"></span></div>",
         "</div>",
+
         "<form id=\"profile-form\" class=\"dp-form\">",
-          "<label class=\"dp-label\">Display name</label>",
-          "<input type=\"text\" name=\"display_name\" value=\"", dn, "\" class=\"dp-input\" maxlength=\"100\"/>",
-          "<label class=\"dp-label\">Bio</label>",
-          "<textarea name=\"bio\" rows=\"3\" class=\"dp-input\" maxlength=\"500\">", bio, "</textarea>",
-          "<label class=\"dp-label\">Avatar URL</label>",
-          "<input type=\"url\" name=\"avatar_url\" value=\"", avatar, "\" class=\"dp-input\"/>",
-          "<div class=\"dp-grid-2-sm\">",
-            "<div><label class=\"dp-label\">Age</label><input type=\"number\" name=\"age\" value=\"", age, "\" class=\"dp-input\" min=\"18\" max=\"120\"/></div>",
-            "<div><label class=\"dp-label\">Position</label><select name=\"position\" class=\"dp-input\">", select_options(position_choices, pos), "</select></div>",
+          "<input type=\"hidden\" name=\"avatar_url\" value=\"", avatar, "\"/>",
+
+          # Section: Photos
+          "<div class=\"dp-edit-card\">",
+            "<h3 class=\"dp-edit-card-title\">Photos</h3>",
+            "<p class=\"dp-muted\" style=\"font-size:0.8rem;margin-bottom:0.75rem\">Add up to 6 photos. First photo is your avatar.</p>",
+            "<div class=\"dp-photo-grid\" id=\"photo-grid\">",
+              photo_slots,
+            "</div>",
+            "<input type=\"file\" id=\"photo-upload-input\" accept=\"image/*\" style=\"display:none\"/>",
           "</div>",
-          "<div class=\"dp-grid-2-sm\">",
-            "<div><label class=\"dp-label\">Body type</label><select name=\"body_type\" class=\"dp-input\">", select_options(body_type_choices, bt), "</select></div>",
-            "<div><label class=\"dp-label\">Tribe / Type</label><select name=\"tribe\" class=\"dp-input\">", select_options(tribe_choices, tr), "</select></div>",
+
+          # Section: About
+          "<div class=\"dp-edit-card\">",
+            "<h3 class=\"dp-edit-card-title\">About you</h3>",
+            "<label class=\"dp-label\">Display name</label>",
+            "<input type=\"text\" name=\"display_name\" value=\"", dn, "\" class=\"dp-input\" maxlength=\"100\" placeholder=\"How you want to be seen\"/>",
+            "<label class=\"dp-label\">Bio</label>",
+            "<div class=\"dp-bio-wrap\">",
+              "<textarea name=\"bio\" rows=\"3\" class=\"dp-input\" maxlength=\"500\" id=\"bio-input\" placeholder=\"Tell people about yourself...\">", bio, "</textarea>",
+              "<span class=\"dp-bio-counter\" id=\"bio-counter\">", bio_len, "/500</span>",
+            "</div>",
           "</div>",
-          "<label class=\"dp-label\">Looking for</label>",
-          "<textarea name=\"looking_for\" rows=\"2\" class=\"dp-input\" maxlength=\"200\" placeholder=\"Dates, chats, right now, friends...\">", looking, "</textarea>",
-          "<button type=\"submit\" class=\"dp-btn dp-btn-fire\">Save</button>",
+
+          # Section: Details
+          "<div class=\"dp-edit-card\">",
+            "<h3 class=\"dp-edit-card-title\">Details</h3>",
+            "<div class=\"dp-grid-2-sm\">",
+              "<div><label class=\"dp-label\">Age</label><input type=\"number\" name=\"age\" value=\"", age, "\" class=\"dp-input\" min=\"18\" max=\"120\" placeholder=\"18+\"/></div>",
+              "<div></div>",
+            "</div>",
+            "<label class=\"dp-label\">Position</label>",
+            "<div class=\"dp-pills\" data-pill-group=\"position\">",
+              position_pills,
+              "<input type=\"hidden\" name=\"position\" value=\"", HTML.escape(pos), "\"/>",
+            "</div>",
+            "<label class=\"dp-label\">Body type</label>",
+            "<div class=\"dp-pills\" data-pill-group=\"body_type\">",
+              body_type_pills,
+              "<input type=\"hidden\" name=\"body_type\" value=\"", HTML.escape(bt), "\"/>",
+            "</div>",
+            "<label class=\"dp-label\">Tribe / Type</label>",
+            "<div class=\"dp-pills\" data-pill-group=\"tribe\">",
+              tribe_pills,
+              "<input type=\"hidden\" name=\"tribe\" value=\"", HTML.escape(tr), "\"/>",
+            "</div>",
+          "</div>",
+
+          # Section: Looking for
+          "<div class=\"dp-edit-card\">",
+            "<h3 class=\"dp-edit-card-title\">Looking for</h3>",
+            "<textarea name=\"looking_for\" rows=\"2\" class=\"dp-input\" maxlength=\"200\" placeholder=\"Dates, chats, right now, friends...\">", looking, "</textarea>",
+          "</div>",
+
+          "<button type=\"submit\" class=\"dp-btn dp-btn-fire dp-btn-full\" id=\"profile-save\">Save profile</button>",
         "</form>",
         "<div id=\"profile-msg\" class=\"dp-success\" style=\"display:none\">Saved!</div>",
       "</div>"
@@ -429,7 +447,7 @@ defmodule <%= @app_module %>.Views do
 
   # --- Fragment: Profile View ---
 
-  def frag_profile_view(_auth, profile) do
+  def frag_profile_view(_auth, profile, photos \\ []) do
     dn = HTML.escape(profile["display_name"] || "Unknown")
     bio = HTML.escape(profile["bio"] || "")
     uid = HTML.escape(profile["user_id"] || "")
@@ -439,9 +457,20 @@ defmodule <%= @app_module %>.Views do
     bt = HTML.escape(choice_label(profile["body_type"] || ""))
     pos = HTML.escape(choice_label(profile["position"] || ""))
 
-    avatar_html = case avatar do
-      "" -> "<div class=\"dp-profile-avatar-letter\">" <> HTML.escape(first_char(dn)) <> "</div>"
-      av -> "<img src=\"" <> HTML.escape(av) <> "\" class=\"dp-profile-avatar\" alt=\"\"/>"
+    # Show gallery if photos exist, otherwise fall back to avatar/letter
+    gallery_html = case photos do
+      [] ->
+        case avatar do
+          "" -> "<div class=\"dp-profile-avatar-letter\">" <> HTML.escape(first_char(dn)) <> "</div>"
+          av -> "<img src=\"" <> HTML.escape(av) <> "\" class=\"dp-profile-avatar\" alt=\"\"/>"
+        end
+      _ ->
+        photos_html = map_iolist(photos, fn p ->
+          "<img src=\"" <> HTML.escape(p["url"] || "") <> "\" alt=\"\" class=\"dp-view-photo\" data-lightbox/>"
+        end)
+        :erlang.iolist_to_binary([
+          "<div class=\"dp-view-gallery\" id=\"view-gallery\">", photos_html, "</div>"
+        ])
     end
 
     tr_view = HTML.escape(choice_label(profile["tribe"] || ""))
@@ -457,7 +486,7 @@ defmodule <%= @app_module %>.Views do
     :erlang.iolist_to_binary([
       "<div class=\"dp-container dp-page\">",
         "<div class=\"dp-profile-card\">",
-          avatar_html,
+          gallery_html,
           "<h1>", dn, "</h1>",
           "<p class=\"dp-bio\">", bio, "</p>",
           details,
@@ -470,6 +499,52 @@ defmodule <%= @app_module %>.Views do
       "</div>"
     ])
   end
+
+  defp render_pills(_name, [], _selected), do: []
+  defp render_pills(name, [{value, label} | rest], selected) do
+    active = if value == selected, do: " dp-pill-active", else: ""
+    [
+      :erlang.iolist_to_binary([
+        "<button type=\"button\" class=\"dp-pill", active, "\" data-pill-value=\"",
+        HTML.escape(value), "\" data-pill-for=\"", HTML.escape(name), "\">",
+        HTML.escape(label), "</button>"
+      ]) | render_pills(name, rest, selected)
+    ]
+  end
+
+  defp render_photo_slots(photos) do
+    filled = render_filled_photos(photos, 0)
+    count = length_count(photos, 0)
+    empties = render_empty_slots(count, 6)
+    :erlang.iolist_to_binary([filled, empties])
+  end
+
+  defp render_filled_photos([], _idx), do: []
+  defp render_filled_photos([photo | rest], idx) do
+    url = HTML.escape(photo["url"] || "")
+    pid = HTML.escape(stringify(photo["id"] || ""))
+    badge = if idx == 0, do: "<span class=\"dp-photo-badge\">Primary</span>", else: ""
+    [
+      :erlang.iolist_to_binary([
+        "<div class=\"dp-photo-slot dp-photo-filled\" data-photo-id=\"", pid, "\">",
+          "<img src=\"", url, "\" alt=\"\" class=\"dp-photo-img\"/>",
+          badge,
+          "<button type=\"button\" class=\"dp-photo-remove\" data-photo-delete=\"", pid, "\" aria-label=\"Remove photo\">&times;</button>",
+        "</div>"
+      ]) | render_filled_photos(rest, idx + 1)
+    ]
+  end
+
+  defp render_empty_slots(current, max) when current >= max, do: []
+  defp render_empty_slots(current, max) do
+    [
+      "<div class=\"dp-photo-slot dp-photo-empty\" data-photo-add><span class=\"dp-photo-plus\">+</span></div>"
+      | render_empty_slots(current + 1, max)
+    ]
+  end
+
+  defp length_count([], acc), do: acc
+  defp length_count([_ | t], acc), do: length_count(t, acc + 1)
 
   defp build_detail_list(items) do
     filtered = filter_nonempty(items, [])
@@ -487,39 +562,6 @@ defmodule <%= @app_module %>.Views do
   defp filter_nonempty([{_, ""} | t], acc), do: filter_nonempty(t, acc)
   defp filter_nonempty([h | t], acc), do: filter_nonempty(t, [h | acc])
 
-  defp select_options([], _selected), do: []
-  defp select_options([{value, label} | t], selected) do
-    sel_attr = if value == selected, do: " selected", else: ""
-
-    [
-      "<option value=\"",
-      HTML.escape(value),
-      "\"",
-      sel_attr,
-      ">",
-      HTML.escape(label),
-      "</option>"
-      | select_options(t, selected)
-    ]
-  end
-
-  defp ensure_choice(options, ""), do: options
-  defp ensure_choice(options, current) do
-    case option_member?(options, current) do
-      true ->
-        options
-
-      false ->
-        case options do
-          [head | tail] -> [head, {current, current} | tail]
-          [] -> [{current, current}]
-        end
-    end
-  end
-
-  defp option_member?([], _), do: false
-  defp option_member?([{value, _} | _], value), do: true
-  defp option_member?([_ | t], value), do: option_member?(t, value)
 
   defp normalize_choice(val) when is_binary(val), do: ascii_downcase(val, [])
   defp normalize_choice(_), do: ""

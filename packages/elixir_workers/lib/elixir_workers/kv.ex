@@ -17,6 +17,10 @@ defmodule ElixirWorkers.KV do
         need = %{"type" => "kv_get", "ns" => namespace, "key" => key, "id" => need_id}
         {Conn.add_need(conn, need), nil}
 
+      false ->
+        # Fulfilled but key does not exist
+        {conn, nil}
+
       value ->
         {conn, value}
     end
@@ -30,6 +34,10 @@ defmodule ElixirWorkers.KV do
       nil ->
         need = %{"type" => "kv_get_meta", "ns" => namespace, "key" => key, "id" => need_id}
         {Conn.add_need(conn, need), nil}
+
+      false ->
+        # Fulfilled but key does not exist
+        {conn, nil}
 
       result ->
         {conn, result}

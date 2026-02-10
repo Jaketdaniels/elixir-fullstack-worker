@@ -313,8 +313,9 @@ async function fulfillNeeds(needs, workerEnv) {
       switch (need.type) {
         case "kv_get": {
           const ns = workerEnv[need.ns];
-          if (!ns) { bindings[need.id] = null; return; }
-          bindings[need.id] = await ns.get(need.key);
+          if (!ns) { bindings[need.id] = false; return; }
+          const kvVal = await ns.get(need.key);
+          bindings[need.id] = kvVal === null ? false : kvVal;
           break;
         }
         case "kv_get_meta": {
@@ -355,7 +356,8 @@ async function fulfillNeeds(needs, workerEnv) {
       }
     } catch (e) {
       console.error("Binding fulfillment error:", need.type, need.id, e.message);
-      bindings[need.id] = null;
+      // Use empty result (not null) to prevent infinite re-fulfillment loops
+      bindings[need.id] = need.type === "d1_query" ? { rows: [] } : false;
     }
   });
 
@@ -450,33 +452,8 @@ export default {
         return auth.handler(request);
       }
 
-      // Database migration endpoint (requires auth)
-      if (url.pathname === "/migrate" && request.method === "POST") {
-        try {
-          // Require authentication for migration
-          const migAuth = createAuth(workerEnv);
-          const migSession = await migAuth.api.getSession({ headers: request.headers });
-          if (!migSession) {
-            return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } });
-          }
-          // Check admin emails
-          const adminEmails = (workerEnv.ADMIN_EMAILS || "").split(",").map(e => e.trim().toLowerCase());
-          if (!adminEmails.includes((migSession.user?.email || "").toLowerCase())) {
-            return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: { "content-type": "application/json" } });
-          }
-          const { getMigrations } = await import("better-auth/db");
-          const migrationDb = new Kysely({ dialect: new D1Dialect({ database: workerEnv.DB }) });
-          const authConfig = { database: { db: migrationDb, type: "sqlite" }, secret: workerEnv.BETTER_AUTH_SECRET || "dev-secret-change-me", emailAndPassword: { enabled: true } };
-          const { toBeCreated, toBeAdded, runMigrations } = await getMigrations(authConfig);
-          if (toBeCreated.length === 0 && toBeAdded.length === 0) {
-            return new Response(JSON.stringify({ message: "No migrations needed" }), { headers: { "content-type": "application/json" } });
-          }
-          await runMigrations();
-          return new Response(JSON.stringify({ message: "Migrations complete", created: toBeCreated.map(t => t.table), added: toBeAdded.map(t => t.table) }), { headers: { "content-type": "application/json" } });
-        } catch (e) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "content-type": "application/json" } });
-        }
-      }
+      // Database migrations run via wrangler CLI: npx wrangler d1 execute phoenix-db --file=schema.sql
+      // Better Auth auto-creates its tables on first auth request
 
       // Media upload endpoint (handled in JS for binary data)
       if (url.pathname === "/api/media/upload" && request.method === "POST") {
@@ -528,11 +505,12 @@ export default {
 
           const buf = await file.arrayBuffer();
           const bytes = new Uint8Array(buf);
-          let binary = "";
-          for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
+          // Chunk-based Base64 to avoid O(n²) string concatenation
+          const chunks = [];
+          for (let i = 0; i < bytes.length; i += 8192) {
+            chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + 8192)));
           }
-          const b64 = btoa(binary);
+          const b64 = btoa(chunks.join(""));
           const dataUri = "data:" + file.type + ";base64," + b64;
 
           return new Response(JSON.stringify({ url: dataUri }), {
@@ -632,11 +610,12 @@ export default {
         });
       }
 
-      // Pass 2: if Elixir needs binding data, fulfill and re-run
-      if (result._needs && result._needs.length > 0) {
+      // Multi-pass: keep fulfilling needs until none remain (max 5 passes)
+      let pass = 1;
+      while (result._needs && result._needs.length > 0 && pass < 5) {
         const bindings = await fulfillNeeds(result._needs, workerEnv);
 
-        enrichedReq.bindings = bindings;
+        enrichedReq.bindings = { ...(enrichedReq.bindings || {}), ...bindings };
         enrichedReq._state = {
           auth: authData,
           _fingerprint: fingerprint,
@@ -652,6 +631,7 @@ export default {
             status: 502, headers: { "content-type": "application/json" },
           });
         }
+        pass++;
       }
 
       // Execute write effects after response (non-blocking)
@@ -660,9 +640,9 @@ export default {
       }
 
       // Return HTTP response
-      const respHeaders = { ...result.headers };
+      const respHeaders = { ...(result.headers || {}) };
       delete respHeaders._effects;
-      return new Response(result.body, { status: result.status, headers: respHeaders });
+      return new Response(result.body || "", { status: result.status || 200, headers: respHeaders });
     } catch (e) {
       console.error("Worker error:", e.message || "unknown", e.stack || "");
       return new Response(JSON.stringify({ error: "internal server error" }), {

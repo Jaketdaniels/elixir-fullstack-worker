@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS blocks (
 CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id);
 CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id);
 
--- Typing indicators (transient)
+-- Typing indicators (transient — currently using KV, D1 table reserved for history/audit)
 
 CREATE TABLE IF NOT EXISTS typing_indicators (
   user_id TEXT NOT NULL REFERENCES user(id),
@@ -158,3 +158,16 @@ CREATE TABLE IF NOT EXISTS spam_scores (
   ban_expires_at TEXT,
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Profile photos (multi-photo gallery)
+
+CREATE TABLE IF NOT EXISTS profile_photos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  position INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_profile_photos_user ON profile_photos(user_id, position);
