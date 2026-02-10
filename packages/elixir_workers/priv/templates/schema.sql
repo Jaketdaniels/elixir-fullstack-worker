@@ -65,22 +65,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  from_id TEXT NOT NULL REFERENCES user(id),
-  to_id TEXT NOT NULL REFERENCES user(id),
-  content TEXT NOT NULL,
-  media_url TEXT DEFAULT '',
-  message_type TEXT DEFAULT 'text',
-  read INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_id, read, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(from_id, to_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(to_id, from_id, read) WHERE read = 0;
-CREATE INDEX IF NOT EXISTS idx_messages_cursor ON messages(from_id, to_id, id DESC);
+-- Private chat + typing are stored in Durable Objects (see wrangler.jsonc)
 
 CREATE TABLE IF NOT EXISTS tokens (
   user_id TEXT PRIMARY KEY REFERENCES user(id),
@@ -128,15 +113,6 @@ CREATE TABLE IF NOT EXISTS blocks (
 
 CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id);
 CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id);
-
--- Typing indicators (transient — currently using KV, D1 table reserved for history/audit)
-
-CREATE TABLE IF NOT EXISTS typing_indicators (
-  user_id TEXT NOT NULL REFERENCES user(id),
-  conversation_with TEXT NOT NULL REFERENCES user(id),
-  updated_at TEXT DEFAULT (datetime('now')),
-  PRIMARY KEY (user_id, conversation_with)
-);
 
 -- Anti-spam tables
 

@@ -27,7 +27,7 @@ Open http://localhost:8797.
 
 - **Live Map** — Leaflet + OpenStreetMap with realtime user markers, geolocation tracking
 - **Auth** — Better Auth (email/password) running in the JS layer, sessions passed to Elixir
-- **Messaging** — Direct messages between users, token-gated (1 token per message)
+- **Messaging** — Direct messages between users via Durable Objects, token-gated (1 token per message)
 - **Profiles** — User profiles with display name, bio, avatar
 - **Token Economy** — 50 tokens on signup, 20 daily free refill, purchasable
 - **Admin Dashboard** — User stats, message counts, token economy overview
@@ -50,8 +50,9 @@ Three layers:
 3. **Elixir code** — router, views, assets, all business logic
 
 Bindings:
-- **D1** — Users (Better Auth), profiles, messages, tokens
+- **D1** — Users (Better Auth), profiles, tokens, moderation
 - **KV** — Live locations with 5-minute TTL
+- **Durable Objects** — Private chat rooms, per-user inbox state, chat stats
 
 ## Routes
 

@@ -1,7 +1,7 @@
 defmodule <%= @app_module %>.Router do
   use ElixirWorkers.Router
 
-  alias ElixirWorkers.{Conn, KV, D1}
+  alias ElixirWorkers.{Conn, KV, D1, DO}
 
   defp routes do
     [
@@ -307,10 +307,15 @@ defmodule <%= @app_module %>.Router do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         uid = auth["userId"]
-        {conn, convos} = D1.query(conn, "DB",
-          "SELECT m.content, m.created_at, m.from_id, m.to_id, m.read, p.display_name, p.avatar_url, CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END as other_id FROM messages m LEFT JOIN profiles p ON p.user_id = CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END WHERE m.id IN (SELECT MAX(id) FROM messages WHERE from_id = ? OR to_id = ? GROUP BY CASE WHEN from_id = ? THEN to_id ELSE from_id END) ORDER BY m.created_at DESC LIMIT 50",
-          [uid, uid, uid, uid, uid])
-        Conn.html(conn, 200, <%= @app_module %>.Views.frag_messages(auth, convos || []))
+        {conn, snapshot} = inbox_snapshot(conn, uid, 50)
+        convos = case snapshot do
+          nil -> []
+          s -> s["conversations"] || []
+        end
+        other_ids = map_vals_key(convos, "other_id")
+        {conn, profiles} = fetch_profiles_basic_for_ids(conn, other_ids)
+        enriched = enrich_conversations(convos, profiles, uid)
+        Conn.html(conn, 200, <%= @app_module %>.Views.frag_messages(auth, enriched))
     end
   end
 
@@ -327,18 +332,18 @@ defmodule <%= @app_module %>.Router do
         if block != nil do
           Conn.html(conn, 403, "<div class=\"dp-container dp-page dp-center\"><h1>Blocked</h1><p class=\"dp-muted\">This conversation is not available</p></div>")
         else
-          {conn, msgs} = D1.query(conn, "DB",
-            "SELECT m.id, m.from_id, m.to_id, m.content, m.media_url, m.message_type, m.read, m.created_at, p.display_name FROM messages m LEFT JOIN profiles p ON p.user_id = m.from_id WHERE (m.from_id = ? AND m.to_id = ?) OR (m.from_id = ? AND m.to_id = ?) ORDER BY m.id DESC LIMIT 50",
-            [uid, other_id, other_id, uid])
+          {conn, convo} = chat_room_call(conn, uid, other_id, "getConversation", [uid, other_id, 50])
+          msgs = case convo do
+            nil -> []
+            c -> c["messages"] || []
+          end
+
+          conn = inbox_mark_read(conn, uid, other_id)
+
           {conn, other_profile} = D1.query_one(conn, "DB",
             "SELECT * FROM profiles WHERE user_id = ?", [other_id])
 
-          conn = D1.exec(conn, "DB",
-            "UPDATE messages SET read = 1 WHERE to_id = ? AND from_id = ? AND read = 0",
-            [uid, other_id])
-
-          reversed = reverse_list(msgs || [])
-          Conn.html(conn, 200, <%= @app_module %>.Views.frag_conversation(auth, other_profile || %{}, reversed))
+          Conn.html(conn, 200, <%= @app_module %>.Views.frag_conversation(auth, other_profile || %{}, msgs))
         end
     end
   end
@@ -358,7 +363,7 @@ defmodule <%= @app_module %>.Router do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         {conn, user_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM user", [])
-        {conn, msg_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM messages", [])
+        {conn, chat_totals} = chat_stats(conn)
         {conn, token_stats} = D1.query_one(conn, "DB",
           "SELECT SUM(lifetime_earned) as issued, SUM(lifetime_earned - balance) as spent FROM tokens", [])
         {conn, recent_users} = D1.query(conn, "DB",
@@ -366,9 +371,14 @@ defmodule <%= @app_module %>.Router do
         {conn, report_count} = D1.query_one(conn, "DB",
           "SELECT COUNT(*) as count FROM reports WHERE status = 'pending'", [])
 
+        msg_total = case chat_totals do
+          nil -> 0
+          stats -> to_int(stats["messages"])
+        end
+
         stats = %{
           "users" => (user_count || %{})["count"] || 0,
-          "messages" => (msg_count || %{})["count"] || 0,
+          "messages" => msg_total,
           "tokens_issued" => (token_stats || %{})["issued"] || 0,
           "tokens_spent" => (token_stats || %{})["spent"] || 0,
           "pending_reports" => (report_count || %{})["count"] || 0,
@@ -726,6 +736,107 @@ defmodule <%= @app_module %>.Router do
   defp map_vals([], _key), do: []
   defp map_vals([h | t], key), do: [h[key] | map_vals(t, key)]
 
+  # --- Durable Object helpers ---
+
+  defp conversation_room_name(uid_a, uid_b) when uid_a <= uid_b,
+    do: "dm:" <> uid_a <> ":" <> uid_b
+  defp conversation_room_name(uid_a, uid_b),
+    do: "dm:" <> uid_b <> ":" <> uid_a
+
+  defp inbox_name(uid), do: "inbox:" <> uid
+
+  defp chat_room_call(conn, uid, other_id, method, args) do
+    room = conversation_room_name(uid, other_id)
+    DO.call(conn, "CHAT_ROOMS", room, method, args)
+  end
+
+  defp chat_room_cast(conn, uid, other_id, method, args) do
+    room = conversation_room_name(uid, other_id)
+    DO.cast(conn, "CHAT_ROOMS", room, method, args)
+  end
+
+  defp inbox_snapshot(conn, uid, limit) do
+    DO.call(conn, "INBOX_DO", inbox_name(uid), "snapshot", [limit])
+  end
+
+  defp inbox_mark_read(conn, uid, other_id) do
+    DO.cast(conn, "INBOX_DO", inbox_name(uid), "markRead", [other_id])
+  end
+
+  defp inbox_unread_total(conn, uid) do
+    {conn, total} = DO.call(conn, "INBOX_DO", inbox_name(uid), "unreadTotal", [])
+    {conn, to_int(total)}
+  end
+
+  defp chat_stats(conn) do
+    DO.call(conn, "CHAT_STATS", "global", "getTotals", [])
+  end
+
+  defp fetch_profiles_basic_for_ids(conn, []), do: {conn, %{}}
+  defp fetch_profiles_basic_for_ids(conn, ids) do
+    fetch_profiles_basic_acc(conn, unique_ids(ids), %{})
+  end
+
+  defp fetch_profiles_basic_acc(conn, [], acc), do: {conn, acc}
+  defp fetch_profiles_basic_acc(conn, [id | rest], acc) do
+    {conn, profile} = D1.query_one(conn, "DB",
+      "SELECT user_id, display_name, avatar_url FROM profiles WHERE user_id = ?", [id])
+
+    next = case profile do
+      nil -> acc
+      p -> put_map(acc, id, p)
+    end
+
+    fetch_profiles_basic_acc(conn, rest, next)
+  end
+
+  defp enrich_conversations([], _profiles, _uid), do: []
+  defp enrich_conversations([convo | rest], profiles, uid) do
+    other_id = convo["other_id"] || ""
+    profile = case :maps.find(other_id, profiles) do
+      {:ok, p} -> p
+      :error -> %{}
+    end
+
+    unread_count = to_int(convo["unread_count"])
+    last_message = convo["last_message"] || ""
+    last_message_at = convo["last_message_at"] || ""
+    last_from_id = convo["last_from_id"] || ""
+
+    item = %{
+      "other_id" => other_id,
+      "display_name" => profile["display_name"] || other_id,
+      "avatar_url" => profile["avatar_url"] || "",
+      "last_message" => last_message,
+      "content" => last_message,
+      "last_message_at" => last_message_at,
+      "created_at" => last_message_at,
+      "from_id" => last_from_id,
+      "to_id" => uid,
+      "read" => if(unread_count > 0, do: 0, else: 1),
+      "unread_count" => unread_count
+    }
+
+    [item | enrich_conversations(rest, profiles, uid)]
+  end
+
+  defp unique_ids(ids), do: unique_ids(ids, [])
+  defp unique_ids([], acc), do: reverse_list(acc)
+  defp unique_ids([id | rest], acc) do
+    if list_member?(acc, id), do: unique_ids(rest, acc), else: unique_ids(rest, [id | acc])
+  end
+
+  defp to_int(nil), do: 0
+  defp to_int(v) when is_integer(v), do: v
+  defp to_int(v) when is_float(v), do: trunc(v)
+  defp to_int(v) when is_binary(v) do
+    case Integer.parse(v) do
+      {n, _} -> n
+      :error -> 0
+    end
+  end
+  defp to_int(_), do: 0
+
   defp api_profile_get(conn) do
     case require_auth_api(conn) do
       {:error, conn} -> conn
@@ -963,14 +1074,32 @@ defmodule <%= @app_module %>.Router do
                       end
 
                       if balance > 0 do
-                        # Atomic balance guard prevents TOCTOU race
-                        conn = D1.batch(conn, "DB", [
-                          %{"sql" => "UPDATE tokens SET balance = balance - 1 WHERE user_id = ? AND balance > 0",
-                            "params" => [uid]},
-                          %{"sql" => "INSERT INTO messages (from_id, to_id, content, media_url, message_type) VALUES (?, ?, ?, ?, ?)",
-                            "params" => [uid, to_id, content, media_url, message_type]}
-                        ])
-                        Conn.json(conn, 201, %{"sent" => true, "tokens_remaining" => balance - 1})
+                        payload = %{
+                          "from_id" => uid,
+                          "to_id" => to_id,
+                          "content" => content,
+                          "media_url" => media_url,
+                          "message_type" => message_type,
+                          "created_at" => conn["_state"]["_now"] || ""
+                        }
+
+                        {conn, sent} = chat_room_call(conn, uid, to_id, "sendMessage", [payload])
+
+                        case sent do
+                          nil ->
+                            Conn.json(conn, 201, %{"sent" => true, "tokens_remaining" => balance - 1})
+                          %{"error" => _err} ->
+                            Conn.json(conn, 503, %{"error" => "chat_unavailable"})
+                          _ ->
+                            next_balance = balance - 1
+                            conn = D1.batch(conn, "DB", [
+                              %{"sql" => "UPDATE tokens SET balance = balance - 1 WHERE user_id = ? AND balance > 0",
+                                "params" => [uid]},
+                              %{"sql" => "INSERT INTO token_transactions (user_id, type, amount, tier, balance_after) VALUES (?, 'message', -1, '', ?)",
+                                "params" => [uid, next_balance]}
+                            ])
+                            Conn.json(conn, 201, %{"sent" => true, "tokens_remaining" => next_balance, "message" => sent})
+                        end
                       else
                         Conn.json(conn, 402, %{"error" => "insufficient_tokens"})
                       end
@@ -987,17 +1116,16 @@ defmodule <%= @app_module %>.Router do
       {:ok, conn, auth} ->
         other_id = conn["path_params"]["id"]
         uid = auth["userId"]
-        {conn, msgs} = D1.query(conn, "DB",
-          "SELECT id, from_id, to_id, content, media_url, message_type, read, created_at FROM messages WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?) ORDER BY id DESC LIMIT 50",
-          [uid, other_id, other_id, uid])
-
-        # Check typing indicator via KV (auto-expires after 5s TTL)
-        {conn, typing_val} = KV.get(conn, "LOCATIONS", "typing:" <> other_id <> ":" <> uid)
-        is_typing = typing_val != nil
-
-        # Reverse to get ASC order (we fetched DESC for LIMIT efficiency)
-        reversed = reverse_list(msgs || [])
-        Conn.json(conn, 200, %{"messages" => reversed, "typing" => is_typing})
+        {conn, convo} = chat_room_call(conn, uid, other_id, "getConversation", [uid, other_id, 50])
+        msgs = case convo do
+          nil -> []
+          data -> data["messages"] || []
+        end
+        typing = case convo do
+          nil -> false
+          data -> data["typing"] == true
+        end
+        Conn.json(conn, 200, %{"messages" => msgs, "typing" => typing})
     end
   end
 
@@ -1013,14 +1141,21 @@ defmodule <%= @app_module %>.Router do
         case after_id do
           nil -> Conn.json(conn, 400, %{"error" => "after param required"})
           _ ->
-            {conn, msgs} = D1.query(conn, "DB",
-              "SELECT id, from_id, to_id, content, media_url, message_type, read, created_at FROM messages WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) AND id > ? ORDER BY id ASC LIMIT 50",
-              [uid, other_id, other_id, uid, after_id])
-
-            # Check typing via KV (auto-expires after 5s TTL)
-            {conn, typing_val} = KV.get(conn, "LOCATIONS", "typing:" <> other_id <> ":" <> uid)
-
-            Conn.json(conn, 200, %{"messages" => msgs || [], "typing" => typing_val != nil})
+            after_num = safe_parse_int(after_id)
+            case after_num do
+              nil -> Conn.json(conn, 400, %{"error" => "after must be an integer"})
+              _ ->
+                {conn, data} = chat_room_call(conn, uid, other_id, "getNewer", [uid, other_id, after_num, 50])
+                msgs = case data do
+                  nil -> []
+                  d -> d["messages"] || []
+                end
+                typing = case data do
+                  nil -> false
+                  d -> d["typing"] == true
+                end
+                Conn.json(conn, 200, %{"messages" => msgs, "typing" => typing})
+            end
         end
     end
   end
@@ -1037,12 +1172,17 @@ defmodule <%= @app_module %>.Router do
         case before_id do
           nil -> Conn.json(conn, 400, %{"error" => "before param required"})
           _ ->
-            {conn, msgs} = D1.query(conn, "DB",
-              "SELECT id, from_id, to_id, content, media_url, message_type, read, created_at FROM messages WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) AND id < ? ORDER BY id DESC LIMIT 30",
-              [uid, other_id, other_id, uid, before_id])
-
-            reversed = reverse_list(msgs || [])
-            Conn.json(conn, 200, %{"messages" => reversed})
+            before_num = safe_parse_int(before_id)
+            case before_num do
+              nil -> Conn.json(conn, 400, %{"error" => "before must be an integer"})
+              _ ->
+                {conn, data} = chat_room_call(conn, uid, other_id, "getOlder", [uid, other_id, before_num, 30])
+                msgs = case data do
+                  nil -> []
+                  d -> d["messages"] || []
+                end
+                Conn.json(conn, 200, %{"messages" => msgs})
+            end
         end
     end
   end
@@ -1053,8 +1193,7 @@ defmodule <%= @app_module %>.Router do
       {:ok, conn, auth} ->
         other_id = conn["path_params"]["id"]
         uid = auth["userId"]
-        conn = KV.put(conn, "LOCATIONS", "typing:" <> uid <> ":" <> other_id, "1",
-          %{"expiration_ttl" => 5})
+        conn = chat_room_cast(conn, uid, other_id, "setTyping", [uid, other_id])
         Conn.json(conn, 200, %{"ok" => true})
     end
   end
@@ -1064,16 +1203,21 @@ defmodule <%= @app_module %>.Router do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         uid = auth["userId"]
-        {conn, convos} = D1.query(conn, "DB",
-          "SELECT m.content as last_message, m.created_at as last_message_at, m.from_id, m.to_id, p.display_name, p.avatar_url, CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END as other_id, (SELECT COUNT(*) FROM messages m2 WHERE m2.from_id = CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END AND m2.to_id = ? AND m2.read = 0) as unread_count FROM messages m LEFT JOIN profiles p ON p.user_id = CASE WHEN m.from_id = ? THEN m.to_id ELSE m.from_id END WHERE m.id IN (SELECT MAX(id) FROM messages WHERE from_id = ? OR to_id = ? GROUP BY CASE WHEN from_id = ? THEN to_id ELSE from_id END) ORDER BY m.created_at DESC LIMIT 50",
-          [uid, uid, uid, uid, uid, uid, uid])
-
-        {conn, unread_total} = D1.query_one(conn, "DB",
-          "SELECT COUNT(*) as count FROM messages WHERE to_id = ? AND read = 0", [uid])
-
+        {conn, snapshot} = inbox_snapshot(conn, uid, 50)
+        convos = case snapshot do
+          nil -> []
+          s -> s["conversations"] || []
+        end
+        other_ids = map_vals_key(convos, "other_id")
+        {conn, profiles} = fetch_profiles_basic_for_ids(conn, other_ids)
+        enriched = enrich_conversations(convos, profiles, uid)
+        unread_total = case snapshot do
+          nil -> 0
+          s -> to_int(s["unread_total"])
+        end
         Conn.json(conn, 200, %{
-          "conversations" => convos || [],
-          "unread_total" => (unread_total || %{})["count"] || 0
+          "conversations" => enriched,
+          "unread_total" => unread_total
         })
     end
   end
@@ -1084,9 +1228,8 @@ defmodule <%= @app_module %>.Router do
       {:ok, conn, auth} ->
         other_id = conn["path_params"]["id"]
         uid = auth["userId"]
-        conn = D1.exec(conn, "DB",
-          "UPDATE messages SET read = 1 WHERE to_id = ? AND from_id = ? AND read = 0",
-          [uid, other_id])
+        conn = chat_room_cast(conn, uid, other_id, "markRead", [uid, other_id])
+        conn = inbox_mark_read(conn, uid, other_id)
         Conn.json(conn, 200, %{"ok" => true})
     end
   end
@@ -1327,10 +1470,9 @@ defmodule <%= @app_module %>.Router do
       {:error, conn} -> conn
       {:ok, conn, auth} ->
         uid = auth["userId"]
-        {conn, unread} = D1.query_one(conn, "DB",
-          "SELECT COUNT(*) as count FROM messages WHERE to_id = ? AND read = 0", [uid])
+        {conn, unread} = inbox_unread_total(conn, uid)
         Conn.json(conn, 200, %{
-          "unread_messages" => (unread || %{})["count"] || 0,
+          "unread_messages" => unread,
           "unread_notifications" => 0
         })
     end
@@ -1364,13 +1506,18 @@ defmodule <%= @app_module %>.Router do
 
   defp api_public_stats(conn) do
     {conn, user_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM user", [])
-    {conn, msg_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM messages", [])
+    {conn, chat_totals} = chat_stats(conn)
     {conn, token_stats} = D1.query_one(conn, "DB",
       "SELECT SUM(lifetime_earned) as issued FROM tokens", [])
 
+    msg_total = case chat_totals do
+      nil -> 0
+      stats -> to_int(stats["messages"])
+    end
+
     Conn.json(conn, 200, %{
       "users" => (user_count || %{})["count"] || 0,
-      "messages" => (msg_count || %{})["count"] || 0,
+      "messages" => msg_total,
       "tokens_issued" => (token_stats || %{})["issued"] || 0
     })
   end
@@ -1382,15 +1529,20 @@ defmodule <%= @app_module %>.Router do
       {:error, conn} -> conn
       {:ok, conn, _auth} ->
         {conn, user_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM user", [])
-        {conn, msg_count} = D1.query_one(conn, "DB", "SELECT COUNT(*) as count FROM messages", [])
+        {conn, chat_totals} = chat_stats(conn)
         {conn, token_stats} = D1.query_one(conn, "DB",
           "SELECT SUM(lifetime_earned) as issued, SUM(lifetime_earned - balance) as spent FROM tokens", [])
         {conn, report_count} = D1.query_one(conn, "DB",
           "SELECT COUNT(*) as count FROM reports WHERE status = 'pending'", [])
 
+        msg_total = case chat_totals do
+          nil -> 0
+          stats -> to_int(stats["messages"])
+        end
+
         Conn.json(conn, 200, %{
           "users" => (user_count || %{})["count"] || 0,
-          "messages" => (msg_count || %{})["count"] || 0,
+          "messages" => msg_total,
           "tokens_issued" => (token_stats || %{})["issued"] || 0,
           "tokens_spent" => (token_stats || %{})["spent"] || 0,
           "pending_reports" => (report_count || %{})["count"] || 0

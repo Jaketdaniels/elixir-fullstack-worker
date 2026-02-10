@@ -27,9 +27,25 @@
     { "binding": "LOCATIONS", "id": "locations-kv-id" }
   ],
 
-  // D1 database (users, profiles, messages, tokens)
+  // D1 database (users, profiles, tokens, moderation)
   "d1_databases": [
     { "binding": "DB", "database_name": "phoenix-db", "database_id": "phoenix-db-id" }
+  ],
+
+  // Durable Objects (private chat + realtime inbox state)
+  "durable_objects": {
+    "bindings": [
+      { "name": "CHAT_ROOMS", "class_name": "PrivateChatRoom" },
+      { "name": "INBOX_DO", "class_name": "UserInbox" },
+      { "name": "CHAT_STATS", "class_name": "ChatStats" }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["PrivateChatRoom", "UserInbox", "ChatStats"]
+    }
   ],
 
   // R2 bucket (media uploads: profile images, chat attachments)

@@ -3,6 +3,7 @@ import avm from "../app.avm";
 import { betterAuth } from "better-auth";
 import { Kysely } from "kysely";
 import { D1Dialect } from "kysely-d1";
+import { DurableObject } from "cloudflare:workers";
 
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 let A = null;
@@ -103,6 +104,414 @@ function createAuth(env) {
       },
     },
   });
+}
+
+// --- Durable Objects ---
+
+const TYPING_TTL_MS = 5000;
+
+function clampInt(value, fallback, min = 1, max = 200) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  const i = Math.floor(n);
+  if (i < min) return min;
+  if (i > max) return max;
+  return i;
+}
+
+function normalizeText(value) {
+  return typeof value === "string" ? value : "";
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function summarizeMessage(content, messageType) {
+  if (messageType === "image" && content.length === 0) return "Image";
+  if (content.length <= 120) return content;
+  return content.slice(0, 120);
+}
+
+export class UserInbox extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    ctx.blockConcurrencyWhile(async () => {
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS conversations (
+          other_id TEXT PRIMARY KEY,
+          last_message TEXT NOT NULL DEFAULT '',
+          last_message_at TEXT NOT NULL DEFAULT '',
+          last_from_id TEXT NOT NULL DEFAULT '',
+          unread_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversations_last_at
+          ON conversations(last_message_at DESC);
+      `);
+    });
+  }
+
+  async recordOutgoing(entry = {}) {
+    return this.upsertConversation(entry, false);
+  }
+
+  async recordIncoming(entry = {}) {
+    return this.upsertConversation(entry, true);
+  }
+
+  async markRead(otherId) {
+    const normalizedOtherId = normalizeText(otherId);
+    if (!normalizedOtherId) return { ok: false, error: "other_id required" };
+
+    this.ctx.storage.sql.exec(
+      "UPDATE conversations SET unread_count = 0 WHERE other_id = ?",
+      normalizedOtherId
+    );
+    return { ok: true };
+  }
+
+  async listConversations(limit = 50) {
+    const safeLimit = clampInt(limit, 50);
+    const rows = this.ctx.storage.sql.exec(
+      "SELECT other_id, last_message, last_message_at, last_from_id, unread_count FROM conversations ORDER BY last_message_at DESC LIMIT ?",
+      safeLimit
+    ).toArray();
+
+    return rows.map((row) => ({
+      other_id: row.other_id || "",
+      last_message: row.last_message || "",
+      last_message_at: row.last_message_at || "",
+      last_from_id: row.last_from_id || "",
+      unread_count: Number(row.unread_count || 0),
+    }));
+  }
+
+  async unreadTotal() {
+    const row = this.ctx.storage.sql.exec(
+      "SELECT COALESCE(SUM(unread_count), 0) AS total FROM conversations"
+    ).one();
+    return Number(row?.total || 0);
+  }
+
+  async snapshot(limit = 50) {
+    const conversations = await this.listConversations(limit);
+    const unread_total = await this.unreadTotal();
+    return { conversations, unread_total };
+  }
+
+  async upsertConversation(entry, incrementUnread) {
+    const payload = entry && typeof entry === "object" ? entry : {};
+    const otherId = normalizeText(payload.other_id || payload.otherId);
+    if (!otherId) return { ok: false, error: "other_id required" };
+
+    const lastMessage = normalizeText(payload.last_message || payload.lastMessage);
+    const lastMessageAt = normalizeText(payload.last_message_at || payload.lastMessageAt) || nowIso();
+    const lastFromId = normalizeText(payload.last_from_id || payload.lastFromId);
+
+    if (incrementUnread) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO conversations (other_id, last_message, last_message_at, last_from_id, unread_count)
+         VALUES (?, ?, ?, ?, 1)
+         ON CONFLICT(other_id) DO UPDATE SET
+           last_message = excluded.last_message,
+           last_message_at = excluded.last_message_at,
+           last_from_id = excluded.last_from_id,
+           unread_count = conversations.unread_count + 1`,
+        otherId,
+        lastMessage,
+        lastMessageAt,
+        lastFromId
+      );
+    } else {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO conversations (other_id, last_message, last_message_at, last_from_id, unread_count)
+         VALUES (?, ?, ?, ?, 0)
+         ON CONFLICT(other_id) DO UPDATE SET
+           last_message = excluded.last_message,
+           last_message_at = excluded.last_message_at,
+           last_from_id = excluded.last_from_id,
+           unread_count = conversations.unread_count`,
+        otherId,
+        lastMessage,
+        lastMessageAt,
+        lastFromId
+      );
+    }
+
+    return { ok: true };
+  }
+}
+
+export class ChatStats extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    ctx.blockConcurrencyWhile(async () => {
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS stats (
+          key TEXT PRIMARY KEY,
+          value INTEGER NOT NULL DEFAULT 0
+        );
+      `);
+      this.ctx.storage.sql.exec(
+        "INSERT OR IGNORE INTO stats (key, value) VALUES ('messages', 0)"
+      );
+    });
+  }
+
+  async incrementMessages(delta = 1) {
+    const amount = clampInt(delta, 1, 0, 100000);
+    if (amount > 0) {
+      this.ctx.storage.sql.exec(
+        "UPDATE stats SET value = value + ? WHERE key = 'messages'",
+        amount
+      );
+    }
+    const row = this.ctx.storage.sql.exec(
+      "SELECT value FROM stats WHERE key = 'messages'"
+    ).one();
+    return Number(row?.value || 0);
+  }
+
+  async getTotals() {
+    const row = this.ctx.storage.sql.exec(
+      "SELECT value FROM stats WHERE key = 'messages'"
+    ).one();
+    return { messages: Number(row?.value || 0) };
+  }
+}
+
+export class PrivateChatRoom extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    ctx.blockConcurrencyWhile(async () => {
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          from_id TEXT NOT NULL,
+          to_id TEXT NOT NULL,
+          content TEXT NOT NULL,
+          media_url TEXT NOT NULL DEFAULT '',
+          message_type TEXT NOT NULL DEFAULT 'text',
+          read INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_messages_id_desc ON messages(id DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_to_from_read ON messages(to_id, from_id, read, id DESC);
+        CREATE TABLE IF NOT EXISTS typing (
+          from_id TEXT NOT NULL,
+          to_id TEXT NOT NULL,
+          expires_at INTEGER NOT NULL,
+          PRIMARY KEY (from_id, to_id)
+        );
+      `);
+    });
+  }
+
+  async sendMessage(payload = {}) {
+    const body = payload && typeof payload === "object" ? payload : {};
+    const fromId = normalizeText(body.from_id || body.fromId);
+    const toId = normalizeText(body.to_id || body.toId);
+    const content = normalizeText(body.content);
+    const mediaUrl = normalizeText(body.media_url || body.mediaUrl);
+    const messageType = body.message_type === "image" ? "image" : "text";
+
+    if (!fromId || !toId) return { error: "from_id and to_id required" };
+    if (!content && !mediaUrl) return { error: "content or media required" };
+
+    const createdAt = normalizeText(body.created_at || body.createdAt) || nowIso();
+
+    const inserted = this.ctx.storage.sql.exec(
+      `INSERT INTO messages (from_id, to_id, content, media_url, message_type, read, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?)
+       RETURNING id, from_id, to_id, content, media_url, message_type, read, created_at`,
+      fromId,
+      toId,
+      content,
+      mediaUrl,
+      messageType,
+      createdAt
+    ).one();
+
+    const message = this.normalizeMessage(inserted);
+    const summary = summarizeMessage(message.content, message.message_type);
+
+    try {
+      const senderInbox = this.env.INBOX_DO.getByName("inbox:" + fromId);
+      const recipientInbox = this.env.INBOX_DO.getByName("inbox:" + toId);
+      const chatStats = this.env.CHAT_STATS.getByName("global");
+
+      await Promise.all([
+        senderInbox.recordOutgoing({
+          other_id: toId,
+          last_message: summary,
+          last_message_at: message.created_at,
+          last_from_id: fromId,
+        }),
+        recipientInbox.recordIncoming({
+          other_id: fromId,
+          last_message: summary,
+          last_message_at: message.created_at,
+          last_from_id: fromId,
+        }),
+        chatStats.incrementMessages(1),
+      ]);
+    } catch (e) {
+      console.error("Chat side effects failed:", e.message || String(e));
+    }
+
+    return message;
+  }
+
+  async getConversation(viewerId, otherId, limit = 50) {
+    const viewer = normalizeText(viewerId);
+    const other = normalizeText(otherId);
+    if (!viewer || !other) return { messages: [], typing: false };
+
+    this.markReadInternal(viewer, other);
+    const messages = this.selectLatestMessages(limit);
+    const typing = this.isTypingInternal(other, viewer);
+    return { messages, typing };
+  }
+
+  async getNewer(viewerId, otherId, afterId, limit = 50) {
+    const viewer = normalizeText(viewerId);
+    const other = normalizeText(otherId);
+    if (!viewer || !other) return { messages: [], typing: false };
+
+    const cursor = clampInt(afterId, 0, 0, 2147483647);
+    const safeLimit = clampInt(limit, 50);
+    const rows = this.ctx.storage.sql.exec(
+      `SELECT id, from_id, to_id, content, media_url, message_type, read, created_at
+       FROM messages
+       WHERE id > ?
+       ORDER BY id ASC
+       LIMIT ?`,
+      cursor,
+      safeLimit
+    ).toArray();
+
+    return {
+      messages: rows.map((row) => this.normalizeMessage(row)),
+      typing: this.isTypingInternal(other, viewer),
+    };
+  }
+
+  async getOlder(viewerId, otherId, beforeId, limit = 30) {
+    const viewer = normalizeText(viewerId);
+    const other = normalizeText(otherId);
+    if (!viewer || !other) return { messages: [] };
+
+    const cursor = clampInt(beforeId, 0, 0, 2147483647);
+    if (cursor <= 0) return { messages: [] };
+
+    const safeLimit = clampInt(limit, 30);
+    const rows = this.ctx.storage.sql.exec(
+      `SELECT id, from_id, to_id, content, media_url, message_type, read, created_at
+       FROM messages
+       WHERE id < ?
+       ORDER BY id DESC
+       LIMIT ?`,
+      cursor,
+      safeLimit
+    ).toArray();
+
+    const ordered = [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+      ordered.push(this.normalizeMessage(rows[i]));
+    }
+
+    return { messages: ordered };
+  }
+
+  async markRead(viewerId, otherId) {
+    const viewer = normalizeText(viewerId);
+    const other = normalizeText(otherId);
+    if (!viewer || !other) return { ok: false, error: "viewer_id and other_id required" };
+
+    this.markReadInternal(viewer, other);
+
+    const unread = this.ctx.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM messages WHERE to_id = ? AND from_id = ? AND read = 0",
+      viewer,
+      other
+    ).one();
+
+    return { ok: true, unread_remaining: Number(unread?.count || 0) };
+  }
+
+  async setTyping(fromId, toId) {
+    const fromUser = normalizeText(fromId);
+    const toUser = normalizeText(toId);
+    if (!fromUser || !toUser) return { ok: false, error: "from_id and to_id required" };
+
+    const expiresAt = Date.now() + TYPING_TTL_MS;
+    this.ctx.storage.sql.exec(
+      `INSERT INTO typing (from_id, to_id, expires_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(from_id, to_id) DO UPDATE SET expires_at = excluded.expires_at`,
+      fromUser,
+      toUser,
+      expiresAt
+    );
+    this.pruneTyping();
+    return { ok: true };
+  }
+
+  normalizeMessage(row) {
+    return {
+      id: Number(row?.id || 0),
+      from_id: row?.from_id || "",
+      to_id: row?.to_id || "",
+      content: row?.content || "",
+      media_url: row?.media_url || "",
+      message_type: row?.message_type || "text",
+      read: Number(row?.read || 0),
+      created_at: row?.created_at || "",
+    };
+  }
+
+  selectLatestMessages(limit) {
+    const safeLimit = clampInt(limit, 50);
+    const rows = this.ctx.storage.sql.exec(
+      `SELECT id, from_id, to_id, content, media_url, message_type, read, created_at
+       FROM messages
+       ORDER BY id DESC
+       LIMIT ?`,
+      safeLimit
+    ).toArray();
+
+    const ordered = [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+      ordered.push(this.normalizeMessage(rows[i]));
+    }
+    return ordered;
+  }
+
+  markReadInternal(viewerId, otherId) {
+    this.ctx.storage.sql.exec(
+      "UPDATE messages SET read = 1 WHERE to_id = ? AND from_id = ? AND read = 0",
+      viewerId,
+      otherId
+    );
+  }
+
+  pruneTyping() {
+    this.ctx.storage.sql.exec(
+      "DELETE FROM typing WHERE expires_at <= ?",
+      Date.now()
+    );
+  }
+
+  isTypingInternal(fromId, toId) {
+    this.pruneTyping();
+    const row = this.ctx.storage.sql.exec(
+      "SELECT 1 AS active FROM typing WHERE from_id = ? AND to_id = ? AND expires_at > ? LIMIT 1",
+      fromId,
+      toId,
+      Date.now()
+    ).one();
+    return row != null;
+  }
 }
 
 class WasmExit extends Error { constructor(c) { super(); this.code = c; } }
@@ -305,6 +714,23 @@ function extractEnvVars(workerEnv) {
 
 // --- Binding Fulfillment ---
 
+async function invokeDurableObjectRpc(workerEnv, namespaceName, objectName, methodName, args = []) {
+  const namespace = workerEnv[namespaceName];
+  if (!namespace) {
+    throw new Error("Durable Object namespace not found: " + namespaceName);
+  }
+
+  const stub = namespace.getByName(objectName);
+  const method = stub?.[methodName];
+
+  if (typeof method !== "function") {
+    throw new Error("Durable Object RPC method not found: " + methodName);
+  }
+
+  const finalArgs = Array.isArray(args) ? args : [];
+  return await method.apply(stub, finalArgs);
+}
+
 async function fulfillNeeds(needs, workerEnv) {
   const bindings = {};
 
@@ -350,6 +776,17 @@ async function fulfillNeeds(needs, workerEnv) {
           bindings[need.id] = { rows: res.results };
           break;
         }
+        case "do_rpc": {
+          const value = await invokeDurableObjectRpc(
+            workerEnv,
+            need.ns,
+            need.name,
+            need.method,
+            need.args || []
+          );
+          bindings[need.id] = { ok: true, value };
+          break;
+        }
         default:
           console.warn("Unknown need type:", need.type);
           bindings[need.id] = null;
@@ -357,7 +794,9 @@ async function fulfillNeeds(needs, workerEnv) {
     } catch (e) {
       console.error("Binding fulfillment error:", need.type, need.id, e.message);
       // Use empty result (not null) to prevent infinite re-fulfillment loops
-      bindings[need.id] = need.type === "d1_query" ? { rows: [] } : false;
+      if (need.type === "d1_query") bindings[need.id] = { rows: [] };
+      else if (need.type === "do_rpc") bindings[need.id] = { ok: false, error: e.message || "do_rpc_failed" };
+      else bindings[need.id] = false;
     }
   });
 
@@ -402,6 +841,16 @@ async function executeEffects(effects, workerEnv) {
             return s.params && s.params.length ? stmt.bind(...s.params) : stmt;
           });
           await db.batch(stmts);
+          break;
+        }
+        case "do_rpc": {
+          await invokeDurableObjectRpc(
+            workerEnv,
+            eff.ns,
+            eff.name,
+            eff.method,
+            eff.args || []
+          );
           break;
         }
         default:

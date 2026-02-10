@@ -71,19 +71,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  from_id TEXT NOT NULL REFERENCES user(id),
-  to_id TEXT NOT NULL REFERENCES user(id),
-  content TEXT NOT NULL,
-  read INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_id, read, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(from_id, to_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(to_id, from_id, read) WHERE read = 0;
+-- Private chat + typing are stored in Durable Objects (see wrangler.jsonc)
 
 CREATE TABLE IF NOT EXISTS tokens (
   user_id TEXT PRIMARY KEY REFERENCES user(id),
