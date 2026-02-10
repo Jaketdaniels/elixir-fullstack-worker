@@ -12,7 +12,8 @@ packages/elixir_workers/priv/stdlib/
 .DS_Store
 .env
 .dev.vars
-_screenshots/
+_screenshots/*
 vendor/
 atomvm-wasi/
 openapi.json
+.playwright-cli/
